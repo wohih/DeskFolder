@@ -99,7 +99,8 @@ DeskFolder/
 │   └── screenshot-collapsed.png    # 折叠态特写
 │
 ├── LICENSE                         # MIT 协议
-└── README.md                       # 本文件
+├── README.md                       # 本文件
+└── RELEASE.md                      # 发布与打包二进制指南
 ```
 
 ## ⚙️ 配置说明
@@ -129,6 +130,10 @@ DeskFolder/
 
 - 若遇到异常闪退，程序会弹出错误框并将完整堆栈写入 `%APPDATA%\DeskFolder\crash.log`，将日志内容反馈给维护者即可快速定位。
 - WPF 透明置顶窗口在部分远程桌面/VirtualBox 环境下可能表现异常，建议在物理显示器上使用。
+
+## 🚀 发布
+
+打标签与发布 GitHub Release、打包二进制（含免运行时版本）请见 [RELEASE.md](RELEASE.md)。
 
 ## 📄 License
 
