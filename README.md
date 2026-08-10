@@ -1,4 +1,4 @@
-# DeskFolder — 安卓风格的 Windows 桌面快捷方式文件夹
+# DeskFolder — Windows 桌面快捷方式文件夹
 
 > 把桌面快捷方式按文件夹整理，像手机 App 文件夹一样悬停展开、动画流畅、轻量无感。
 
