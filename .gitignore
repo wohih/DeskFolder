@@ -1,0 +1,28 @@
+# .NET / WPF
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+.vs/
+
+# 项目构建/发布产物（迭代测试版本，可重新生成）
+out_rel*/
+publish/
+publish_stage/
+_archive/
+
+# 调试日志
+dbg.txt
+crash.log
+
+# IDE
+*.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,71 @@
+<Window x:Class="DeskFolder.Views.ImageCropWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="裁剪背景图片" Width="600" Height="760"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="#FAFAFA" FontFamily="Microsoft YaHei UI">
+
+    <StackPanel Margin="16">
+        <TextBlock x:Name="InfoText" FontSize="12" Foreground="#555" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+        <!-- 图片视口（透明棋盘格底，便于观察非矩形/透明区域） -->
+        <Border Width="540" Height="380" HorizontalAlignment="Center" BorderBrush="#CCC" BorderThickness="1">
+            <Border.Background>
+                <DrawingBrush TileMode="Tile" ViewportUnits="Absolute" Viewport="0,0,16,16">
+                    <DrawingBrush.Drawing>
+                        <DrawingGroup>
+                            <GeometryDrawing Brush="#E6E6E6" Geometry="M0,0 H8 V8 H0 Z"/>
+                            <GeometryDrawing Brush="#E6E6E6" Geometry="M8,8 H16 V16 H8 Z"/>
+                        </DrawingGroup>
+                    </DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Border.Background>
+            <Canvas x:Name="Canvas" Width="540" Height="380" ClipToBounds="True"
+                    Background="Transparent" MouseMove="Canvas_MouseMove"
+                    MouseLeftButtonUp="Canvas_MouseLeftButtonUp"/>
+        </Border>
+
+        <TextBlock FontSize="11" Foreground="#777" Margin="0,8,0,0" TextWrapping="Wrap">
+            折叠态与展开态使用<Run FontWeight="Bold">各自独立</Run>的裁剪区域（下方两个选框互不影响）。
+            <Run Foreground="#0078D7" FontWeight="Bold">■</Run> 当前编辑态　<Run Foreground="#999">□</Run> 另一态参考框。
+        </TextBlock>
+
+        <!-- 状态切换：决定当前编辑哪个态的裁剪 -->
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+            <RadioButton x:Name="CollapsedRadio" Content="编辑折叠态裁剪" GroupName="CropMode"
+                         Checked="Mode_Collapsed" Margin="0,0,18,0"/>
+            <RadioButton x:Name="ExpandedRadio" Content="编辑展开态裁剪" GroupName="CropMode"
+                         Checked="Mode_Expanded"/>
+            <TextBlock x:Name="ModeHint" FontSize="11" Foreground="#0078D7" Margin="14,0,0,0"
+                       VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- 实时预览：直接按各自容器比例填充，所见即所得（不会再偏移） -->
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0" HorizontalAlignment="Center">
+            <StackPanel Margin="0,0,22,0">
+                <Border x:Name="CollPreviewBox" BorderBrush="#0078D7" BorderThickness="2"
+                        Background="#EEE" HorizontalAlignment="Center">
+                    <Image x:Name="CollPreview" Stretch="Fill"
+                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                </Border>
+                <TextBlock Text="折叠态预览" HorizontalAlignment="Center" FontSize="11"
+                           Foreground="#0078D7" Margin="0,4,0,0"/>
+            </StackPanel>
+            <StackPanel>
+                <Border x:Name="ExpPreviewBox" BorderBrush="#E67E22" BorderThickness="2"
+                        Background="#EEE" HorizontalAlignment="Center">
+                    <Image x:Name="ExpPreview" Stretch="Fill"
+                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                </Border>
+                <TextBlock Text="展开态预览" HorizontalAlignment="Center" FontSize="11"
+                           Foreground="#E67E22" Margin="0,4,0,0"/>
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="取消" Click="Cancel_Click" Padding="16,6" Margin="0,0,10,0"/>
+            <Button Content="应用裁剪" Click="Apply_Click" Padding="16,6"
+                    Background="#0078D7" Foreground="White" BorderThickness="0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

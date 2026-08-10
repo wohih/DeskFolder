@@ -1,0 +1,302 @@
+<Window x:Class="DeskFolder.Views.ThemeEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="主题设置" Width="380" Height="640"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="#FAFAFA" FontFamily="Microsoft YaHei UI">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20,16">
+
+            <TextBlock Text="主题名称" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <TextBox x:Name="NameBox" TextChanged="NameBox_TextChanged" Margin="0,0,0,12"/>
+
+            <TextBlock Text="主题类型" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <ComboBox x:Name="ModeCombo" Margin="0,0,0,12" SelectionChanged="ModeCombo_SelectionChanged">
+                <ComboBoxItem Content="填充颜色"/>
+                <ComboBoxItem Content="简约方框"/>
+                <ComboBoxItem Content="图片背景"/>
+            </ComboBox>
+
+            <!-- 颜色组（填充背景 / 方框颜色） -->
+            <StackPanel x:Name="ColorGroup">
+                <TextBlock x:Name="ColorLabel" Text="背景颜色" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                <!-- 透明棋盘格 + 实际颜色预览（透明度可见） -->
+                <Grid Width="200" Height="90" HorizontalAlignment="Left" Margin="0,0,0,10">
+                    <Grid.Background>
+                        <DrawingBrush TileMode="Tile" ViewportUnits="Absolute" Viewport="0,0,16,16">
+                            <DrawingBrush.Drawing>
+                                <DrawingGroup>
+                                    <GeometryDrawing Brush="#E6E6E6" Geometry="M0,0 H8 V8 H0 Z"/>
+                                    <GeometryDrawing Brush="#E6E6E6" Geometry="M8,8 H16 V16 H8 Z"/>
+                                </DrawingGroup>
+                            </DrawingBrush.Drawing>
+                        </DrawingBrush>
+                    </Grid.Background>
+                    <Border x:Name="ColorPreview" CornerRadius="8"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,2">
+                    <TextBlock Text="色相 H" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="HVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+                <Slider x:Name="HueSlider" Minimum="0" Maximum="360" TickFrequency="1" Margin="0,0,0,8"/>
+
+                <Grid Margin="0,0,0,2">
+                    <TextBlock Text="饱和度 S" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+                <Slider x:Name="SatSlider" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,0,0,8"/>
+
+                <Grid Margin="0,0,0,2">
+                    <TextBlock Text="明度 V" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="VVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+                <Slider x:Name="ValSlider" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,0,0,8"/>
+
+                <TextBlock Text="十六进制颜色（可手动输入，范围不限）" FontSize="12" Foreground="#777" Margin="0,0,0,3"/>
+                <TextBox x:Name="HexBox" TextChanged="HexBox_TextChanged" Margin="0,0,0,12"/>
+            </StackPanel>
+
+            <!-- 透明度组（填充背景 / 图片背景共用，文案随模式变化） -->
+            <StackPanel x:Name="OpacityGroup" Margin="0,0,0,12">
+                <TextBlock x:Name="OpacityLabel" Text="背景透明度" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="46"/>
+                    </Grid.ColumnDefinitions>
+                    <Slider x:Name="OpacitySlider" Grid.Column="0" Minimum="0" Maximum="100" TickFrequency="1"/>
+                    <TextBlock x:Name="OpacityVal" Grid.Column="1" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+            </StackPanel>
+
+            <!-- 方框组（简约方框模式） -->
+            <StackPanel x:Name="BorderGroup" Margin="0,0,0,12">
+                <TextBlock Text="方框宽度" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="46"/>
+                    </Grid.ColumnDefinitions>
+                    <Slider x:Name="BorderWidthSlider" Grid.Column="0" Minimum="1" Maximum="20" TickFrequency="1"/>
+                    <TextBlock x:Name="BorderWidthVal" Grid.Column="1" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+
+                <TextBlock Text="方框类型" FontSize="14" FontWeight="SemiBold" Margin="0,12,0,4"/>
+                <ComboBox x:Name="BorderStyleCombo" SelectionChanged="BorderStyleCombo_SelectionChanged"/>
+            </StackPanel>
+
+            <!-- 图片组（图片背景模式） -->
+            <StackPanel x:Name="ImageGroup" Margin="0,0,0,12">
+                <TextBlock Text="图片背景模式" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <RadioButton x:Name="SingleModeRadio" Content="单图模式" GroupName="ImgLayout"
+                                 Checked="ImgLayout_Changed" Margin="0,0,18,0"/>
+                    <RadioButton x:Name="MultiModeRadio" Content="多图模式" GroupName="ImgLayout"
+                                 Checked="ImgLayout_Changed"/>
+                </StackPanel>
+                <TextBlock FontSize="11" Foreground="#777" TextWrapping="Wrap" Margin="0,0,0,6">
+                    单图模式：折叠与展开共用同一组图片（轮播/随机时同步显示同一张）。多图模式：折叠与展开各自一组图片，可分别设置。
+                </TextBlock>
+
+                <!-- 缩略图预览（透明棋盘格底） -->
+                <Grid Width="200" Height="110" HorizontalAlignment="Left" Margin="0,0,0,6">
+                    <Grid.Background>
+                        <DrawingBrush TileMode="Tile" ViewportUnits="Absolute" Viewport="0,0,16,16">
+                            <DrawingBrush.Drawing>
+                                <DrawingGroup>
+                                    <GeometryDrawing Brush="#E6E6E6" Geometry="M0,0 H8 V8 H0 Z"/>
+                                    <GeometryDrawing Brush="#E6E6E6" Geometry="M8,8 H16 V16 H8 Z"/>
+                                </DrawingGroup>
+                            </DrawingBrush.Drawing>
+                        </DrawingBrush>
+                    </Grid.Background>
+                    <Image x:Name="ImageThumb" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+
+                <!-- 单图模式：折叠/展开共用同一组图 -->
+                <StackPanel x:Name="SinglePanel" Margin="0,0,0,8">
+                    <Button x:Name="SingleImportBtn" Content="导入图片…（可多选）" Click="SingleImport_Click"
+                            Padding="10,5" HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                    <WrapPanel x:Name="SingleList" Margin="0,0,0,6"/>
+                    <TextBlock Text="播放方式" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                    <ComboBox x:Name="SinglePlayCombo" SelectionChanged="SinglePlay_Changed" Margin="0,0,0,6">
+                        <ComboBoxItem Content="不轮播"/>
+                        <ComboBoxItem Content="轮流播放"/>
+                        <ComboBoxItem Content="随机播放"/>
+                    </ComboBox>
+                    <TextBlock Text="切换间隔" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                    <ComboBox x:Name="SingleIntervalCombo" SelectionChanged="SingleInterval_Changed" Margin="0,0,0,6">
+                        <ComboBoxItem Content="1 分钟"/>
+                        <ComboBoxItem Content="3 分钟"/>
+                        <ComboBoxItem Content="5 分钟"/>
+                        <ComboBoxItem Content="10 分钟"/>
+                        <ComboBoxItem Content="15 分钟"/>
+                        <ComboBoxItem Content="30 分钟"/>
+                        <ComboBoxItem Content="60 分钟"/>
+                    </ComboBox>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button x:Name="CropImageBtn" Content="裁剪图片…" Click="CropImage_Click"
+                                Padding="10,5" Margin="0,0,8,0"/>
+                        <Button x:Name="ClearCropBtn" Content="清除裁剪" Click="ClearCrop_Click"
+                                Padding="10,5"/>
+                    </StackPanel>
+                    <TextBlock x:Name="CropStatusText" FontSize="11" Foreground="#0078D7"
+                               TextWrapping="Wrap" Margin="0,4,0,0" Text="未裁剪（显示整图）"/>
+                </StackPanel>
+
+                <!-- 多图模式：折叠/展开各自一组图，分别设置 -->
+                <StackPanel x:Name="MultiPanel" Visibility="Collapsed">
+                    <!-- 折叠态 -->
+                    <Border BorderBrush="#DDD" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                        <StackPanel>
+                            <TextBlock Text="折叠态图片" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <Button Content="导入图片…（可多选）" Click="CollapsedImport_Click" Padding="8,4"
+                                    HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                            <WrapPanel x:Name="CollapsedList" Margin="0,0,0,6"/>
+                            <TextBlock Text="播放方式" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CollapsedPlayCombo" SelectionChanged="CollapsedPlay_Changed" Margin="0,0,0,6">
+                                <ComboBoxItem Content="不轮播"/>
+                                <ComboBoxItem Content="轮流播放"/>
+                                <ComboBoxItem Content="随机播放"/>
+                            </ComboBox>
+                            <TextBlock Text="切换间隔" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CollapsedIntervalCombo" SelectionChanged="CollapsedInterval_Changed" Margin="0,0,0,6">
+                                <ComboBoxItem Content="1 分钟"/><ComboBoxItem Content="3 分钟"/><ComboBoxItem Content="5 分钟"/>
+                                <ComboBoxItem Content="10 分钟"/><ComboBoxItem Content="15 分钟"/>
+                                <ComboBoxItem Content="30 分钟"/><ComboBoxItem Content="60 分钟"/>
+                            </ComboBox>
+                            <Button Content="裁剪折叠态图片…" Click="CropCollapsed_Click" Padding="8,4" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- 展开态 -->
+                    <Border BorderBrush="#DDD" BorderThickness="1" CornerRadius="6" Padding="8">
+                        <StackPanel>
+                            <TextBlock Text="展开态图片" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <Button Content="导入图片…（可多选）" Click="ExpandedImport_Click" Padding="8,4"
+                                    HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                            <WrapPanel x:Name="ExpandedList" Margin="0,0,0,6"/>
+                            <TextBlock Text="播放方式" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="ExpandedPlayCombo" SelectionChanged="ExpandedPlay_Changed" Margin="0,0,0,6">
+                                <ComboBoxItem Content="不轮播"/>
+                                <ComboBoxItem Content="轮流播放"/>
+                                <ComboBoxItem Content="随机播放"/>
+                            </ComboBox>
+                            <TextBlock Text="切换间隔" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="ExpandedIntervalCombo" SelectionChanged="ExpandedInterval_Changed" Margin="0,0,0,6">
+                                <ComboBoxItem Content="1 分钟"/><ComboBoxItem Content="3 分钟"/><ComboBoxItem Content="5 分钟"/>
+                                <ComboBoxItem Content="10 分钟"/><ComboBoxItem Content="15 分钟"/>
+                                <ComboBoxItem Content="30 分钟"/><ComboBoxItem Content="60 分钟"/>
+                            </ComboBox>
+                            <Button Content="裁剪展开态图片…" Click="CropExpanded_Click" Padding="8,4" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- 圆角组（所有模式通用） -->
+            <StackPanel x:Name="RadiusGroup" Margin="0,0,0,12">
+                <TextBlock Text="应用文件夹圆角大小" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="46"/>
+                    </Grid.ColumnDefinitions>
+                    <Slider x:Name="RadiusSlider" Grid.Column="0" Minimum="0" Maximum="40" TickFrequency="1"/>
+                    <TextBlock x:Name="RadiusVal" Grid.Column="1" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+            </StackPanel>
+
+            <!-- 文字设置组（所有模式通用；控制文件夹名称文字：折叠态名称条 + 展开态标题） -->
+            <StackPanel x:Name="TextGroup" Margin="0,0,0,12">
+                <TextBlock Text="文字设置" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                <TextBlock Text="字体" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                <ComboBox x:Name="FontCombo" Margin="0,0,0,10" SelectionChanged="FontCombo_SelectionChanged"/>
+
+                <Grid Margin="0,0,0,2">
+                    <TextBlock Text="文字大小" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TextSizeVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               FontWeight="SemiBold" Foreground="#0078D7"/>
+                </Grid>
+                <Slider x:Name="TextSizeSlider" Minimum="0" Maximum="48" TickFrequency="1" Margin="0,0,0,10"/>
+
+                <CheckBox x:Name="TextColorAuto" Content="自动颜色（跟随背景）" Margin="0,0,0,4"
+                          Checked="TextColorAuto_Changed" Unchecked="TextColorAuto_Changed"/>
+                <StackPanel x:Name="TextColorPanel" Margin="0,0,0,10">
+                    <!-- 快速取色：常用颜色一键选 -->
+                    <TextBlock Text="快速取色" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                    <WrapPanel x:Name="TextQuickColors" Margin="0,0,0,8"/>
+
+                    <Grid Margin="0,0,0,2">
+                        <TextBlock Text="色相 H" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TextHVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   FontWeight="SemiBold" Foreground="#0078D7"/>
+                    </Grid>
+                    <Slider x:Name="TextHueSlider" Minimum="0" Maximum="360" TickFrequency="1" Margin="0,0,0,6"/>
+
+                    <Grid Margin="0,0,0,2">
+                        <TextBlock Text="饱和度 S" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TextSVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   FontWeight="SemiBold" Foreground="#0078D7"/>
+                    </Grid>
+                    <Slider x:Name="TextSatSlider" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,0,0,6"/>
+
+                    <Grid Margin="0,0,0,2">
+                        <TextBlock Text="明度 V" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TextVVal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   FontWeight="SemiBold" Foreground="#0078D7"/>
+                    </Grid>
+                    <Slider x:Name="TextValSlider" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,0,0,8"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="34"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TextColorHex" Grid.Column="0" TextChanged="TextColorHex_TextChanged"
+                                 VerticalContentAlignment="Center" ToolTip="十六进制颜色，如 #FF0000"/>
+                        <Border x:Name="TextColorSwatch" Grid.Column="1" Width="28" Height="24" CornerRadius="4"
+                                BorderBrush="#999" BorderThickness="1" Margin="6,0,0,0"/>
+                    </Grid>
+                </StackPanel>
+
+                <TextBlock Text="文字位置" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                <ComboBox x:Name="TextPosCombo" Margin="0,0,0,10" SelectionChanged="TextPosCombo_SelectionChanged">
+                    <ComboBoxItem Content="底部"/>
+                    <ComboBoxItem Content="居中"/>
+                    <ComboBoxItem Content="顶部"/>
+                </ComboBox>
+
+                <CheckBox x:Name="BoldCheck" Content="加粗" Margin="0,0,0,10"
+                          Checked="BoldCheck_Changed" Unchecked="BoldCheck_Changed"/>
+
+                <CheckBox x:Name="HideCollapsedCheck" Content="折叠状态隐藏文字" Margin="0,0,0,4"
+                          Checked="HideCollapsed_Changed" Unchecked="HideCollapsed_Changed"/>
+                <CheckBox x:Name="HideExpandedCheck" Content="展开状态隐藏文字"
+                          Checked="HideExpanded_Changed" Unchecked="HideExpanded_Changed"/>
+            </StackPanel>
+
+            <TextBlock Text="效果预览" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <Border x:Name="SampleChip" Width="130" Height="96" HorizontalAlignment="Left">
+                <TextBlock x:Name="SampleText" Text="文件夹" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" FontSize="14"/>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button x:Name="DeleteButton" Content="删除主题" Click="Delete_Click"
+                        Padding="12,6" Margin="0,0,10,0" Foreground="#C0392B"/>
+                <Button Content="完成" Click="Done_Click" Padding="16,6"
+                        Background="#0078D7" Foreground="White" BorderThickness="0"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>
