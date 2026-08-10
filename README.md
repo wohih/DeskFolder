@@ -132,4 +132,4 @@ DeskFolder/
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 唐朋成
+[MIT](LICENSE) © 2026 wohih
