@@ -35,7 +35,9 @@
                 <Border x:Name="FolderChip" CornerRadius="18" Background="#99000000"
                     AllowDrop="True"
                     DragEnter="FolderChip_DragEnter" Drop="FolderChip_Drop"
-                    MouseLeftButtonDown="FolderChip_MouseLeftButtonDown">
+                    MouseLeftButtonDown="FolderChip_MouseLeftButtonDown"
+                    MouseMove="FolderChip_MouseMove"
+                    MouseLeftButtonUp="FolderChip_MouseLeftButtonUp">
                 <Border.Effect>
                     <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.30" Color="#40000000"/>
                 </Border.Effect>

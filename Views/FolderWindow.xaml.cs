@@ -76,10 +76,13 @@ public partial class FolderWindow : Window
     // 折叠图标拖拽缩放模式：进入后右下角手柄可见，可自由拖动改变折叠图标大小
     private bool _resizeMode;
 
-    // 拖动相关：折叠态用 OS 原生 this.DragMove()（在折叠图标上按下即拖动），平滑无卡顿；
-    // 展开态按需求不提供拖动（保持 out_rel7 行为）。通过位移判定区分"拖动"与"轻点展开"。
-    private bool _dragging;                 // 原生拖动（DragMove）进行中：期间禁用悬停逻辑，避免被打断
-    private double _startLeft, _startTop;   // 拖动起点窗口坐标（用于判定是否发生位移）
+    // 拖动相关：折叠态用 CaptureMouse + MouseMove 手动拖动（窗口挂到桌面后 DragMove 不再可靠）；
+    // 展开态按需求不提供拖动。通过位移判定区分"拖动"与"轻点展开"。
+    private bool _dragging;                 // 拖动进行中：期间禁用悬停逻辑，避免被打断
+    private bool _mouseDown;                // 折叠图标鼠标左键按住中（手动拖动标志）
+    private WpfPoint _dragScreenStart;      // 拖动起点（物理屏幕坐标）
+    private double _winLeftStart, _winTopStart; // 拖动起点窗口左上角（逻辑坐标，用于判定位移）
+    private double _dpiScaleX = 1.0, _dpiScaleY = 1.0; // DPI 缩放（物理/逻辑）：PointToScreen 返回物理坐标，需换算回逻辑坐标才能赋给 Left/Top
 
     // 动画状态：窗口尺寸/位置只在"展开起点"和"收起终点"一次性改变（避免逐帧重排分层窗口导致的残影/抖动）；
     // 放大/缩小仅驱动内部 Panel 的 Width/Height（同一进度 → 宽高严格同步），窗口本身不动 → 无残影、位置稳定。
@@ -109,6 +112,7 @@ public partial class FolderWindow : Window
     {
         _config = config;
         InitializeComponent();
+        SourceInitialized += OnSourceInitialized;
 
         FolderNameText.Text = config.Name;
         PanelTitle.Text = config.Name;
@@ -124,6 +128,73 @@ public partial class FolderWindow : Window
 
         Loaded += OnLoaded;
         Closed += (_, _) => StopGifTimers(); // 窗口关闭时释放 GIF 计时器，避免泄漏
+    }
+
+    // ---------------- 原生窗口样式：隐藏任务切换器 / 桌面挂件化（兼容 Wallpaper Engine） ----------------
+
+    private const int GWL_EXSTYLE = -20;
+    private const uint WS_EX_TOOLWINDOW = 0x00000080;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    /// <summary>定位桌面壁纸所在的 WorkerW 窗口：壁纸（含 Wallpaper Engine）渲染在它之上、普通应用窗口之下。</summary>
+    private static IntPtr FindWorkerW()
+    {
+        IntPtr progman = FindWindow("Progman", null);
+        if (progman != IntPtr.Zero)
+            SendMessageTimeout(progman, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out _);
+        IntPtr workerw = IntPtr.Zero;
+        EnumWindows((hwnd, _) =>
+        {
+            IntPtr defView = FindWindowEx(hwnd, IntPtr.Zero, "SHELLDLL_DefView", null);
+            if (defView != IntPtr.Zero)
+                workerw = FindWindowEx(IntPtr.Zero, hwnd, "WorkerW", null);
+            return true;
+        }, IntPtr.Zero);
+        return workerw;
+    }
+
+    /// <summary>窗口句柄就绪后：1) 加 WS_EX_TOOLWINDOW 使其不出现在 Alt+Tab 与任务栏；
+    /// 2) 挂到桌面 WorkerW，成为"桌面挂件"——位于壁纸之上、普通窗口之下（兼容 Wallpaper Engine）。</summary>
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, ex | (int)WS_EX_TOOLWINDOW);
+
+        IntPtr workerw = FindWorkerW();
+        if (workerw != IntPtr.Zero && workerw != hwnd)
+            SetParent(hwnd, workerw);
+
+        // 缓存 DPI 缩放（物理像素 / 逻辑 DIP）。150% 缩放 => 1.5。
+        // 拖动时用它把 PointToScreen 得到的物理位移换算回逻辑坐标，否则窗口会以 1.5 倍速跟手。
+        var ps = PresentationSource.FromVisual(this);
+        if (ps?.CompositionTarget != null)
+        {
+            _dpiScaleX = ps.CompositionTarget.TransformToDevice.M11;
+            _dpiScaleY = ps.CompositionTarget.TransformToDevice.M22;
+        }
     }
 
     // ---------------- 初始化 ----------------
@@ -468,8 +539,9 @@ public partial class FolderWindow : Window
     private static double EaseOutCubic(double p) => 1.0 - Math.Pow(1.0 - p, 3.0);
 
     // ---------------- 鼠标交互（悬停展开 / 移开收起 / 折叠态拖动） ----------------
-    // 采用 WPF 原生鼠标事件（MouseEnter / MouseLeave）+ this.DragMove()：不挂任何原生钩子，
-    // 因此 WPF 的 IsMouseOver / 鼠标事件完全正常，悬停展开与折叠态拖动都稳定（out_rel7 行为）。
+    // 采用 WPF 原生鼠标事件（MouseEnter / MouseLeave）+ 折叠态手动拖动（CaptureMouse + MouseMove）：不挂任何原生钩子，
+    // 因此 WPF 的 IsMouseOver / 鼠标事件完全正常，悬停展开与折叠态拖动都稳定。窗口挂到桌面 WorkerW 后
+    // this.DragMove() 不再可靠，故改用 CaptureMouse + MouseMove 手动拖动（out_rel20 行为）。
     // 展开态按需求不提供拖动。
 
     private void Window_MouseEnter(object sender, MouseEventArgs e)
@@ -490,25 +562,43 @@ public partial class FolderWindow : Window
             _collapseTimer.Start();
     }
 
-    /// <summary>折叠图标按下：记录起点并启动 OS 原生平滑拖动（DragMove）。
-    /// 松手后比较窗口位移：有位移→持久化新位置（并允许贴合屏幕最上边）；无位移→视为轻点展开。</summary>
+    /// <summary>折叠图标按下：捕获鼠标并记起点，进入手动拖动（窗口挂到桌面后 DragMove 不再可靠，故改手动）。</summary>
     private void FolderChip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (_expanded) return;                 // 展开态不提供拖动（按需求）
-        _startLeft = Left;
-        _startTop = Top;
+        _mouseDown = true;
+        _dragScreenStart = PointToScreen(e.GetPosition(this));
+        _winLeftStart = Left;
+        _winTopStart = Top;
         _dragging = true;
         _hoverTimer.Stop();
         _collapseTimer.Stop();
-        this.DragMove();                        // 阻塞直到松手；OS 合成、平滑无卡顿
-        _dragging = false;
+        FolderChip.CaptureMouse();
+    }
 
-        bool moved = Math.Abs(Left - _startLeft) > 2 || Math.Abs(Top - _startTop) > 2;
+    /// <summary>拖动中：按鼠标位移实时更新窗口位置（左上为锚点，与面板同角生长）。
+    /// 注意：PointToScreen 返回的是物理屏幕坐标，而 Window.Left/Top 是逻辑坐标，
+    /// 故物理位移需除以 DPI 缩放因子还原为逻辑位移，否则在 150% 等高缩放下窗口会跟着鼠标"加速"。</summary>
+    private void FolderChip_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_mouseDown) return;
+        var cur = PointToScreen(e.GetPosition(this)); // 物理屏幕坐标（绝对，不随窗口位置变化）
+        Left = _winLeftStart + (cur.X - _dragScreenStart.X) / _dpiScaleX;
+        Top = _winTopStart + (cur.Y - _dragScreenStart.Y) / _dpiScaleY;
+    }
+
+    /// <summary>松开：比较位移判定"拖动"或"轻点展开"，并释放鼠标捕获。</summary>
+    private void FolderChip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_mouseDown) return;
+        _mouseDown = false;
+        FolderChip.ReleaseMouseCapture();
+
+        bool moved = Math.Abs(Left - _winLeftStart) > 2 || Math.Abs(Top - _winTopStart) > 2;
         if (moved)
         {
+            // 拖动→持久化新位置（允许贴合屏幕最上边）
             SyncIconFromWindow();
-            // 贴合屏幕最上边：OS 拖动通常把窗口顶到屏幕上沿(Left/Top≈0)，而图标默认在窗口内 WIN_PAD 处；
-            // 此时强制把图标吸附到 y=0（窗口 Top 取 -WIN_PAD，透明窗口上沿多出的阴影被裁掉无妨）。
             if (Top <= 0 && _collapsedTop > 0) _collapsedTop = 0;
             PlaceWindow();
             _config.X = _collapsedLeft;
@@ -519,6 +609,7 @@ public partial class FolderWindow : Window
         {
             Expand();                           // 轻点（无位移）→ 展开
         }
+        _dragging = false;
     }
 
     private void Window_Deactivated(object? sender, EventArgs e)
