@@ -56,6 +56,7 @@ public partial class ThemeEditorWindow : Window
 
         NameBox.Text = _theme.Name;
         ModeCombo.SelectedIndex = (int)_theme.Mode;
+        SyncModeButtons((int)_theme.Mode); // 同步分段控件按钮外观
         OpacitySlider.Value = _theme.BackgroundOpacity * 100;
         RadiusSlider.Value = _theme.CornerRadius;
         BorderWidthSlider.Value = _theme.BorderThickness;
@@ -140,16 +141,16 @@ public partial class ThemeEditorWindow : Window
         _suppress = false;
     }
 
-    /// <summary>根据主题类型显示 / 隐藏各设置分组。</summary>
+    /// <summary>根据主题类型显示 / 隐藏各设置分组及其卡片容器。</summary>
     private void ShowGroupsForMode(ThemeMode mode)
     {
         bool color = mode is ThemeMode.Fill or ThemeMode.BorderOnly;
         bool opacity = mode is ThemeMode.Fill or ThemeMode.Image;
         ColorGroup.Visibility = color ? Visibility.Visible : Visibility.Collapsed;
-        OpacityGroup.Visibility = opacity ? Visibility.Visible : Visibility.Collapsed;
-        BorderGroup.Visibility = mode == ThemeMode.BorderOnly ? Visibility.Visible : Visibility.Collapsed;
-        ImageGroup.Visibility = mode == ThemeMode.Image ? Visibility.Visible : Visibility.Collapsed;
-        RadiusGroup.Visibility = Visibility.Visible;
+        OpacityCard.Visibility = opacity ? Visibility.Visible : Visibility.Collapsed;
+        BorderCard.Visibility = mode == ThemeMode.BorderOnly ? Visibility.Visible : Visibility.Collapsed;
+        ImageCard.Visibility = mode == ThemeMode.Image ? Visibility.Visible : Visibility.Collapsed;
+        RadiusGroup.Visibility = Visibility.Visible; // 圆角始终显示（在卡片内）
 
         ColorLabel.Text = mode == ThemeMode.BorderOnly ? "方框颜色" : "背景颜色";
         OpacityLabel.Text = mode == ThemeMode.Image ? "图片透明度" : "背景透明度";
@@ -159,6 +160,7 @@ public partial class ThemeEditorWindow : Window
     {
         if (_suppress) return;
         _theme.Mode = (ThemeMode)ModeCombo.SelectedIndex;
+        SyncModeButtons(ModeCombo.SelectedIndex); // 同步分段按钮
         ShowGroupsForMode(_theme.Mode);
         LoadColorFromTarget();
         RefreshVisuals();
@@ -286,9 +288,9 @@ public partial class ThemeEditorWindow : Window
         TextHueSlider.Value = Math.Clamp(_th, 0, 360);
         TextSatSlider.Value = Math.Clamp(_ts, 0, 100);
         TextValSlider.Value = Math.Clamp(_tv, 0, 100);
-        TextHVal.Text = ((int)_th).ToString();
-        TextSVal.Text = ((int)_ts).ToString();
-        TextVVal.Text = ((int)_tv).ToString();
+        TextHVal.Text = ((int)_th).ToString() + "°";
+        TextSVal.Text = ((int)_ts).ToString() + "%";
+        TextVVal.Text = ((int)_tv).ToString() + "%";
         _suppress = false;
     }
 
@@ -301,9 +303,9 @@ public partial class ThemeEditorWindow : Window
         TextColorHex.Text = _theme.TextColor;
         _suppress = false;
         SetTextColorSwatch(_theme.TextColor);
-        TextHVal.Text = ((int)_th).ToString();
-        TextSVal.Text = ((int)_ts).ToString();
-        TextVVal.Text = ((int)_tv).ToString();
+        TextHVal.Text = ((int)_th).ToString() + "°";
+        TextSVal.Text = ((int)_ts).ToString() + "%";
+        TextVVal.Text = ((int)_tv).ToString() + "%";
         RefreshVisuals();
         Commit();
     }
@@ -412,9 +414,9 @@ public partial class ThemeEditorWindow : Window
         HexBox.Text = TargetColor;
         _suppress = false;
 
-        HVal.Text = ((int)_h).ToString();
-        SVal.Text = ((int)_s).ToString();
-        VVal.Text = ((int)_v).ToString();
+        HVal.Text = ((int)_h).ToString() + "°";
+        SVal.Text = ((int)_s).ToString() + "%";
+        VVal.Text = ((int)_v).ToString() + "%";
 
         // 饱和度/明度条的渐变随色相更新，提供直观反馈
         SatSlider.Background = new LinearGradientBrush(Colors.Gray, color, 0);
@@ -828,5 +830,72 @@ public partial class ThemeEditorWindow : Window
         S.Save();
         DialogResult = true;
         Close();
+    }
+
+    // ---------------- 自定义标题栏 / 分段控件 ----------------
+
+    private void CloseBtn_Click(object sender, RoutedEventArgs e)
+    {
+        S.Save();
+        DialogResult = true;
+        Close();
+    }
+
+    /// <summary>分段控件：选中填充颜色模式。</summary>
+    private void ModeFill_Click(object sender, RoutedEventArgs e)
+    {
+        _suppress = true;
+        ModeCombo.SelectedIndex = 0;
+        _suppress = false;
+        SyncModeButtons(0);
+        ShowGroupsForMode(ThemeMode.Fill);
+        LoadColorFromTarget();
+        RefreshVisuals();
+        Commit();
+    }
+
+    /// <summary>分段控件：选中简约方框模式。</summary>
+    private void ModeBorder_Click(object sender, RoutedEventArgs e)
+    {
+        _suppress = true;
+        ModeCombo.SelectedIndex = 1;
+        _suppress = false;
+        SyncModeButtons(1);
+        ShowGroupsForMode(ThemeMode.BorderOnly);
+        LoadColorFromTarget();
+        RefreshVisuals();
+        Commit();
+    }
+
+    /// <summary>分段控件：选中图片背景模式。</summary>
+    private void ModeImage_Click(object sender, RoutedEventArgs e)
+    {
+        _suppress = true;
+        ModeCombo.SelectedIndex = 2;
+        _suppress = false;
+        SyncModeButtons(2);
+        ShowGroupsForMode(ThemeMode.Image);
+        LoadColorFromTarget();
+        RefreshVisuals();
+        Commit();
+    }
+
+    /// <summary>同步三个分段按钮的视觉状态（选中=蓝底白字，未选=灰底深字）。</summary>
+    private void SyncModeButtons(int selectedIndex)
+    {
+        var buttons = new[] { ModeFillBtn, ModeBorderBtn, ModeImageBtn };
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            if (i == selectedIndex)
+            {
+                buttons[i].Background = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD7));
+                buttons[i].Foreground = Brushes.White;
+            }
+            else
+            {
+                buttons[i].Background = new SolidColorBrush(Color.FromRgb(0xF0, 0xF0, 0xF0));
+                buttons[i].Foreground = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
+            }
+        }
     }
 }

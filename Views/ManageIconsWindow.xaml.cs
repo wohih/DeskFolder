@@ -39,19 +39,30 @@ public partial class ManageIconsWindow : Window
             var row = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 4, 0, 4)
+                Margin = new Thickness(0, 8, 0, 8)
             };
 
+            // 图标（真实图标，圆角容器）
             if (item?.Icon != null)
             {
-                row.Children.Add(new Image
+                var iconBorder = new Border
+                {
+                    Width = 36,
+                    Height = 36,
+                    CornerRadius = new CornerRadius(8),
+                    Margin = new Thickness(0, 0, 12, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ClipToBounds = true
+                };
+                var img = new Image
                 {
                     Source = item.Icon,
-                    Width = 24,
-                    Height = 24,
-                    Margin = new Thickness(0, 0, 8, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                });
+                    Width = 36,
+                    Height = 36,
+                    Stretch = Stretch.Uniform
+                };
+                iconBorder.Child = img;
+                row.Children.Add(iconBorder);
             }
 
             row.Children.Add(new CheckBox
@@ -59,7 +70,8 @@ public partial class ManageIconsWindow : Window
                 Content = name,
                 Tag = path,
                 ToolTip = path,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 14
             });
 
             IconList.Children.Add(row);
@@ -96,6 +108,7 @@ public partial class ManageIconsWindow : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+    private void Close_Click(object sender, RoutedEventArgs e) => DialogResult = false;
 
     /// <summary>递归收集 IconList 内的所有CheckBox（图标行外层套了 StackPanel）。</summary>
     private IEnumerable<CheckBox> AllCheckBoxes()
