@@ -77,7 +77,7 @@ public partial class FolderWindow : Window
     private bool _resizeMode;
 
     // 拖动相关：折叠态用 CaptureMouse + MouseMove 手动拖动（窗口挂到桌面后 DragMove 不再可靠）；
-    // 展开态按需求不提供拖动。通过位移判定区分"拖动"与"轻点展开"。
+    // 展开态用鼠标中键按住面板任意位置拖动（左键预留给按钮/交互，中键不激活窗口，避免置顶 bug）。
     private bool _dragging;                 // 拖动进行中：期间禁用悬停逻辑，避免被打断
     private bool _mouseDown;                // 折叠图标鼠标左键按住中（手动拖动标志）
     private WpfPoint _dragScreenStart;      // 拖动起点（物理屏幕坐标）
@@ -134,6 +134,7 @@ public partial class FolderWindow : Window
 
     private const int GWL_EXSTYLE = -20;
     private const uint WS_EX_TOOLWINDOW = 0x00000080;
+    private const uint WS_EX_NOACTIVATE = 0x08000000; // 点击不激活窗口，避免 Z 序被提升到普通窗口之上
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
@@ -181,7 +182,7 @@ public partial class FolderWindow : Window
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
-        SetWindowLong(hwnd, GWL_EXSTYLE, ex | (int)WS_EX_TOOLWINDOW);
+        SetWindowLong(hwnd, GWL_EXSTYLE, ex | (int)WS_EX_TOOLWINDOW | (int)WS_EX_NOACTIVATE);
 
         IntPtr workerw = FindWorkerW();
         if (workerw != IntPtr.Zero && workerw != hwnd)
@@ -611,6 +612,45 @@ public partial class FolderWindow : Window
         {
             Expand();                           // 轻点（无位移）→ 展开
         }
+        _dragging = false;
+    }
+
+    // ---------------- 展开态中键拖动（整个面板区域均可触发） ----------------
+    // 事件挂在 Panel 上：Panel 有 Background 参与命中测试，折叠态 Visibility=Collapsed 自动不接收事件。
+    // 中键不激活窗口（不像左键），不会触发 Deactivated → Collapse，也不会导致 Z 序被提升到普通窗口之上。
+    // 复用折叠态的 CaptureMouse + MouseMove 手动拖动；MouseMove 直接复用 FolderChip_MouseMove。
+
+    /// <summary>展开态面板鼠标按下：仅响应中键，捕获鼠标并记起点，进入手动拖动。</summary>
+    private void Panel_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        if (!_expanded || _animating || _resizeMode) return;
+        _mouseDown = true;
+        _dragScreenStart = PointToScreen(e.GetPosition(this));
+        _winLeftStart = Left;
+        _winTopStart = Top;
+        _dragging = true;
+        _hoverTimer.Stop();
+        _collapseTimer.Stop();
+        Panel.CaptureMouse();
+    }
+
+    /// <summary>展开态面板鼠标松开：仅响应中键，释放捕获并持久化新位置。</summary>
+    private void Panel_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        if (!_mouseDown) return;
+        _mouseDown = false;
+        Panel.ReleaseMouseCapture();
+
+        // 拖动→持久化新位置（与折叠态一致：反推折叠图标位置、重新 PlaceWindow、写回配置）
+        SyncIconFromWindow();
+        if (Top <= 0 && _collapsedTop > 0) _collapsedTop = 0;
+        PlaceWindow();
+        _config.X = _collapsedLeft;
+        _config.Y = _collapsedTop;
+        S.Save();
+
         _dragging = false;
     }
 
@@ -1134,15 +1174,31 @@ public partial class FolderWindow : Window
         return new ImageSlot { Target = target, Playlist = playlist, UseExpandedCrop = useExpandedCrop, Theme = theme, Img = img };
     }
 
-    /// <summary>按裁剪区域（折叠态用 ImageCrop*、展开态用 ImageCropExpanded*）对单帧取景；Stretch=Fill 保证选区精确铺满。</summary>
+    /// <summary>按裁剪区域对单帧取景；优先使用文件夹级裁剪配置（如果有），否则使用主题的裁剪配置；Stretch=Fill 保证选区精确铺满。</summary>
     private BitmapSource CropFrame(BitmapSource src, bool expanded, ThemeConfig theme)
     {
-        bool hasCrop = expanded ? theme.HasImageCropExpanded : theme.HasImageCrop;
+        bool hasCrop = _config.HasFolderImageCrop || _config.HasFolderImageCropExpanded
+            ? (expanded ? _config.HasFolderImageCropExpanded : _config.HasFolderImageCrop)
+            : (expanded ? theme.HasImageCropExpanded : theme.HasImageCrop);
         if (!hasCrop) return src;
-        double nx = (expanded ? theme.ImageCropExpandedX : theme.ImageCropX)!.Value;
-        double ny = (expanded ? theme.ImageCropExpandedY : theme.ImageCropY)!.Value;
-        double nw = (expanded ? theme.ImageCropExpandedW : theme.ImageCropW)!.Value;
-        double nh = (expanded ? theme.ImageCropExpandedH : theme.ImageCropH)!.Value;
+
+        // 优先使用文件夹级裁剪配置
+        double nx, ny, nw, nh;
+        if (expanded ? _config.HasFolderImageCropExpanded : _config.HasFolderImageCrop)
+        {
+            nx = (expanded ? _config.FolderImageCropExpandedX : _config.FolderImageCropX)!.Value;
+            ny = (expanded ? _config.FolderImageCropExpandedY : _config.FolderImageCropY)!.Value;
+            nw = (expanded ? _config.FolderImageCropExpandedW : _config.FolderImageCropW)!.Value;
+            nh = (expanded ? _config.FolderImageCropExpandedH : _config.FolderImageCropH)!.Value;
+        }
+        else
+        {
+            nx = (expanded ? theme.ImageCropExpandedX : theme.ImageCropX)!.Value;
+            ny = (expanded ? theme.ImageCropExpandedY : theme.ImageCropY)!.Value;
+            nw = (expanded ? theme.ImageCropExpandedW : theme.ImageCropW)!.Value;
+            nh = (expanded ? theme.ImageCropExpandedH : theme.ImageCropH)!.Value;
+        }
+
         int x = (int)Math.Round(nx * src.PixelWidth);
         int y = (int)Math.Round(ny * src.PixelHeight);
         int w = (int)Math.Round(nw * src.PixelWidth);

@@ -77,6 +77,9 @@
                 Background="#CC000000"
                 AllowDrop="True"
                 DragEnter="FolderChip_DragEnter" Drop="FolderChip_Drop"
+                MouseDown="Panel_MouseDown"
+                MouseMove="FolderChip_MouseMove"
+                MouseUp="Panel_MouseUp"
                 ContextMenu="{StaticResource FolderMenu}">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.4" Color="#50000000"/>
@@ -88,7 +91,7 @@
                     <RowDefinition Height="Auto"/>  <!-- 底部标题栏（仅文字位置=底部时显示） -->
                 </Grid.RowDefinitions>
 
-                <!-- 顶部栏：可拖动；标题在"置顶/居中"时位于此，关闭按钮始终在右上 -->
+                <!-- 顶部栏：标题在"置顶/居中"时位于此，关闭按钮始终在右上 -->
                 <Grid Grid.Row="0" x:Name="TopTitleBar" Margin="14,6,8,0">
                     <TextBlock x:Name="PanelTitle" VerticalAlignment="Center"
                                FontSize="13" FontWeight="SemiBold" Foreground="#F0F0F0"/>

@@ -188,6 +188,45 @@ public class FolderConfig
     public double? FolderFoldH { get; set; } = null;
     /// <summary>每文件夹外观主题覆盖；null = 跟随全局当前主题</summary>
     public string? FolderThemeId { get; set; } = null;
+
+    // ---------------- 裁剪配置覆盖（null = 跟随主题的裁剪设置） ----------------
+    /// <summary>文件夹级折叠态裁剪区域 X（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropX { get; set; } = null;
+    /// <summary>文件夹级折叠态裁剪区域 Y（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropY { get; set; } = null;
+    /// <summary>文件夹级折叠态裁剪区域宽度（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropW { get; set; } = null;
+    /// <summary>文件夹级折叠态裁剪区域高度（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropH { get; set; } = null;
+    /// <summary>文件夹级折叠态是否存在有效裁剪区域（四个值齐全且宽高为正）</summary>
+    [JsonIgnore]
+    public bool HasFolderImageCrop =>
+        FolderImageCropX.HasValue && FolderImageCropY.HasValue && FolderImageCropW.HasValue && FolderImageCropH.HasValue
+        && FolderImageCropW.Value > 0 && FolderImageCropH.Value > 0;
+
+    /// <summary>文件夹级展开态裁剪区域 X（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropExpandedX { get; set; } = null;
+    /// <summary>文件夹级展开态裁剪区域 Y（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropExpandedY { get; set; } = null;
+    /// <summary>文件夹级展开态裁剪区域宽度（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropExpandedW { get; set; } = null;
+    /// <summary>文件夹级展开态裁剪区域高度（归一化 0-1）；null = 使用主题的裁剪设置</summary>
+    public double? FolderImageCropExpandedH { get; set; } = null;
+    /// <summary>文件夹级展开态是否存在有效裁剪区域</summary>
+    [JsonIgnore]
+    public bool HasFolderImageCropExpanded =>
+        FolderImageCropExpandedX.HasValue && FolderImageCropExpandedY.HasValue
+        && FolderImageCropExpandedW.HasValue && FolderImageCropExpandedH.HasValue
+        && FolderImageCropExpandedW.Value > 0 && FolderImageCropExpandedH.Value > 0;
+
+    /// <summary>清除文件夹级裁剪配置（恢复使用主题的裁剪设置）</summary>
+    public void ClearFolderCrop()
+    {
+        FolderImageCropX = null; FolderImageCropY = null;
+        FolderImageCropW = null; FolderImageCropH = null;
+        FolderImageCropExpandedX = null; FolderImageCropExpandedY = null;
+        FolderImageCropExpandedW = null; FolderImageCropExpandedH = null;
+    }
 }
 
 public class AppSettingsData

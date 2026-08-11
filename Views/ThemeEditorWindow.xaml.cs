@@ -18,6 +18,7 @@ namespace DeskFolder.Views;
 public partial class ThemeEditorWindow : Window
 {
     private readonly ThemeConfig _theme;
+    private readonly FolderConfig? _folder; // 文件夹级裁剪配置的目标；null 时裁剪配置存到主题上
     private double _h, _s, _v;   // 色相 0-360，饱和度/明度 0-100（贴合滑块范围）
     private double _th, _ts, _tv; // 文字颜色 H/S/V（独立状态）
     private bool _suppress;
@@ -31,12 +32,14 @@ public partial class ThemeEditorWindow : Window
     private static SettingsService S => App.Settings;
 
     /// <summary>
-    /// 编辑单个主题。folder 不为 null 时，按该文件夹的实际折叠 / 展开尺寸计算裁剪取景辅助框；
-    /// 为 null（全局主题设置）时使用默认折叠尺寸与按全局行列估算的展开尺寸。
+    /// 编辑单个主题。folder 不为 null 时，按该文件夹的实际折叠 / 展开尺寸计算裁剪取景辅助框，
+    /// 且裁剪配置保存到文件夹（不影响其他使用同一主题的文件夹）；
+    /// folder 为 null（全局主题设置）时使用默认折叠尺寸与按全局行列估算的展开尺寸，裁剪配置保存到主题上。
     /// </summary>
     public ThemeEditorWindow(ThemeConfig theme, FolderConfig? folder = null)
     {
         _theme = theme;
+        _folder = folder;
 
         // 折叠尺寸：文件夹覆盖优先，否则默认 150×150
         _collW = folder?.FolderFoldW ?? 150;
@@ -479,11 +482,12 @@ public partial class ThemeEditorWindow : Window
             SampleText.Foreground = new SolidColorBrush(tcol);
     }
 
-    /// <summary>持久化；若该主题正被使用（全局当前主题或被任一文件夹引用）则实时应用到桌面窗口。</summary>
+    /// <summary>持久化；若该主题正被使用（全局当前主题或被任一文件夹引用）则实时应用到桌面窗口。
+    /// 当 _folder 不为 null 时（文件夹级设置），强制通知所有窗口刷新（因为裁剪配置可能已变更）。</summary>
     private void Commit()
     {
         S.Save();
-        if (S.IsThemeInUse(_theme.Id))
+        if (_folder != null || S.IsThemeInUse(_theme.Id))
             S.NotifyChanged();
     }
 
@@ -687,7 +691,7 @@ public partial class ThemeEditorWindow : Window
         Commit();
     }
 
-    /// <summary>读取图片并按主题裁剪区域（若有）返回裁剪后的 BitmapSource，用于缩略图预览。</summary>
+    /// <summary>读取图片并按裁剪区域（优先文件夹级，其次主题）返回裁剪后的 BitmapSource，用于缩略图预览。</summary>
     private BitmapSource? LoadCroppedImage(string path)
     {
         try
@@ -698,12 +702,18 @@ public partial class ThemeEditorWindow : Window
             bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.EndInit();
             bmp.Freeze();
-            if (_theme.HasImageCrop)
+            // 优先使用文件夹级折叠态裁剪配置
+            bool hasCrop = _folder != null ? HasCrop(false) : _theme.HasImageCrop;
+            if (hasCrop)
             {
-                int x = (int)Math.Round(_theme.ImageCropX!.Value * bmp.PixelWidth);
-                int y = (int)Math.Round(_theme.ImageCropY!.Value * bmp.PixelHeight);
-                int w = (int)Math.Round(_theme.ImageCropW!.Value * bmp.PixelWidth);
-                int h = (int)Math.Round(_theme.ImageCropH!.Value * bmp.PixelHeight);
+                double cx = _folder != null ? GetCropVal(false, "X")!.Value : _theme.ImageCropX!.Value;
+                double cy = _folder != null ? GetCropVal(false, "Y")!.Value : _theme.ImageCropY!.Value;
+                double cw = _folder != null ? GetCropVal(false, "W")!.Value : _theme.ImageCropW!.Value;
+                double ch = _folder != null ? GetCropVal(false, "H")!.Value : _theme.ImageCropH!.Value;
+                int x = (int)Math.Round(cx * bmp.PixelWidth);
+                int y = (int)Math.Round(cy * bmp.PixelHeight);
+                int w = (int)Math.Round(cw * bmp.PixelWidth);
+                int h = (int)Math.Round(ch * bmp.PixelHeight);
                 x = Math.Max(0, Math.Min(x, bmp.PixelWidth - 1));
                 y = Math.Max(0, Math.Min(y, bmp.PixelHeight - 1));
                 w = Math.Max(1, Math.Min(w, bmp.PixelWidth - x));
@@ -730,6 +740,73 @@ public partial class ThemeEditorWindow : Window
     private void CropCollapsed_Click(object sender, RoutedEventArgs e) => OpenCrop(1);
     private void CropExpanded_Click(object sender, RoutedEventArgs e) => OpenCrop(2);
 
+    // ---------------- 裁剪配置：支持文件夹级覆盖 ----------------
+    // 当 _folder 不为 null 时，裁剪配置保存到 FolderConfig（不影响其他使用同一主题的文件夹）；
+    // 当 _folder 为 null 时，裁剪配置保存到 ThemeConfig（全局主题设置）。
+    // 读取时优先使用文件夹级配置，如没有则回退到主题配置。
+
+    private bool HasCrop(bool expanded) =>
+        _folder != null
+            ? (expanded ? _folder.HasFolderImageCropExpanded : _folder.HasFolderImageCrop)
+                || (expanded ? _theme.HasImageCropExpanded : _theme.HasImageCrop)
+            : expanded ? _theme.HasImageCropExpanded : _theme.HasImageCrop;
+
+    private double? GetCropVal(bool expanded, string which)
+    {
+        if (_folder != null)
+        {
+            double? val = which switch
+            {
+                "X" => expanded ? _folder.FolderImageCropExpandedX : _folder.FolderImageCropX,
+                "Y" => expanded ? _folder.FolderImageCropExpandedY : _folder.FolderImageCropY,
+                "W" => expanded ? _folder.FolderImageCropExpandedW : _folder.FolderImageCropW,
+                "H" => expanded ? _folder.FolderImageCropExpandedH : _folder.FolderImageCropH,
+                _ => null
+            };
+            if (val.HasValue) return val;
+        }
+        return which switch
+        {
+            "X" => expanded ? _theme.ImageCropExpandedX : _theme.ImageCropX,
+            "Y" => expanded ? _theme.ImageCropExpandedY : _theme.ImageCropY,
+            "W" => expanded ? _theme.ImageCropExpandedW : _theme.ImageCropW,
+            "H" => expanded ? _theme.ImageCropExpandedH : _theme.ImageCropH,
+            _ => null
+        };
+    }
+
+    private void SetCropVal(bool expanded, string which, double? value)
+    {
+        if (_folder != null)
+        {
+            switch (which)
+            {
+                case "X": if (expanded) _folder.FolderImageCropExpandedX = value; else _folder.FolderImageCropX = value; break;
+                case "Y": if (expanded) _folder.FolderImageCropExpandedY = value; else _folder.FolderImageCropY = value; break;
+                case "W": if (expanded) _folder.FolderImageCropExpandedW = value; else _folder.FolderImageCropW = value; break;
+                case "H": if (expanded) _folder.FolderImageCropExpandedH = value; else _folder.FolderImageCropH = value; break;
+            }
+        }
+        else
+        {
+            switch (which)
+            {
+                case "X": if (expanded) _theme.ImageCropExpandedX = value; else _theme.ImageCropX = value; break;
+                case "Y": if (expanded) _theme.ImageCropExpandedY = value; else _theme.ImageCropY = value; break;
+                case "W": if (expanded) _theme.ImageCropExpandedW = value; else _theme.ImageCropW = value; break;
+                case "H": if (expanded) _theme.ImageCropExpandedH = value; else _theme.ImageCropH = value; break;
+            }
+        }
+    }
+
+    private void ClearCropVals(bool expanded)
+    {
+        SetCropVal(expanded, "X", null);
+        SetCropVal(expanded, "Y", null);
+        SetCropVal(expanded, "W", null);
+        SetCropVal(expanded, "H", null);
+    }
+
     /// <summary>打开裁剪对话框；editState：0=同时编辑折叠/展开两态，1=仅折叠，2=仅展开（另态保持原值）。</summary>
     private void OpenCrop(int editState)
     {
@@ -745,13 +822,13 @@ public partial class ThemeEditorWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        Rect? coll = _theme.HasImageCrop
-            ? new Rect(_theme.ImageCropX!.Value, _theme.ImageCropY!.Value,
-                       _theme.ImageCropW!.Value, _theme.ImageCropH!.Value)
+        Rect? coll = HasCrop(false)
+            ? new Rect(GetCropVal(false, "X")!.Value, GetCropVal(false, "Y")!.Value,
+                       GetCropVal(false, "W")!.Value, GetCropVal(false, "H")!.Value)
             : null;
-        Rect? exp = _theme.HasImageCropExpanded
-            ? new Rect(_theme.ImageCropExpandedX!.Value, _theme.ImageCropExpandedY!.Value,
-                       _theme.ImageCropExpandedW!.Value, _theme.ImageCropExpandedH!.Value)
+        Rect? exp = HasCrop(true)
+            ? new Rect(GetCropVal(true, "X")!.Value, GetCropVal(true, "Y")!.Value,
+                       GetCropVal(true, "W")!.Value, GetCropVal(true, "H")!.Value)
             : null;
         var win = new ImageCropWindow(path, coll, exp, _collW, _collH, _expW, _expH, editState);
         win.Owner = this;
@@ -760,24 +837,24 @@ public partial class ThemeEditorWindow : Window
         if (editState == 1)
         {
             var c = win.CollapsedCrop;
-            _theme.ImageCropX = c?.X; _theme.ImageCropY = c?.Y;
-            _theme.ImageCropW = c?.Width; _theme.ImageCropH = c?.Height;
+            SetCropVal(false, "X", c?.X); SetCropVal(false, "Y", c?.Y);
+            SetCropVal(false, "W", c?.Width); SetCropVal(false, "H", c?.Height);
         }
         else if (editState == 2)
         {
             var x = win.ExpandedCrop;
-            _theme.ImageCropExpandedX = x?.X; _theme.ImageCropExpandedY = x?.Y;
-            _theme.ImageCropExpandedW = x?.Width; _theme.ImageCropExpandedH = x?.Height;
+            SetCropVal(true, "X", x?.X); SetCropVal(true, "Y", x?.Y);
+            SetCropVal(true, "W", x?.Width); SetCropVal(true, "H", x?.Height);
         }
         else
         {
             // 同时编辑两态
             var c = win.CollapsedCrop;
-            _theme.ImageCropX = c?.X; _theme.ImageCropY = c?.Y;
-            _theme.ImageCropW = c?.Width; _theme.ImageCropH = c?.Height;
+            SetCropVal(false, "X", c?.X); SetCropVal(false, "Y", c?.Y);
+            SetCropVal(false, "W", c?.Width); SetCropVal(false, "H", c?.Height);
             var x = win.ExpandedCrop;
-            _theme.ImageCropExpandedX = x?.X; _theme.ImageCropExpandedY = x?.Y;
-            _theme.ImageCropExpandedW = x?.Width; _theme.ImageCropExpandedH = x?.Height;
+            SetCropVal(true, "X", x?.X); SetCropVal(true, "Y", x?.Y);
+            SetCropVal(true, "W", x?.Width); SetCropVal(true, "H", x?.Height);
         }
 
         RefreshVisuals();
@@ -791,10 +868,8 @@ public partial class ThemeEditorWindow : Window
     /// <summary>清除裁剪区域；refresh 为 true 时同步刷新预览与状态（导入换图时复用，避免重复刷新）。</summary>
     private void ClearCrop(bool refresh)
     {
-        _theme.ImageCropX = null; _theme.ImageCropY = null;
-        _theme.ImageCropW = null; _theme.ImageCropH = null;
-        _theme.ImageCropExpandedX = null; _theme.ImageCropExpandedY = null;
-        _theme.ImageCropExpandedW = null; _theme.ImageCropExpandedH = null;
+        ClearCropVals(false);
+        ClearCropVals(true);
         if (refresh)
         {
             RefreshVisuals();
@@ -806,10 +881,10 @@ public partial class ThemeEditorWindow : Window
     /// <summary>更新裁剪状态文案与缩略图下方提示（折叠态 / 展开态分别显示）。</summary>
     private void UpdateCropStatus()
     {
-        string CollState() => _theme.HasImageCrop ? "已裁剪" : "整图";
-        string ExpState() => _theme.HasImageCropExpanded ? "已裁剪" : "整图";
+        string CollState() => HasCrop(false) ? "已裁剪" : "整图";
+        string ExpState() => HasCrop(true) ? "已裁剪" : "整图";
         CropStatusText.Text = $"折叠态：{CollState()}　展开态：{ExpState()}";
-        ClearCropBtn.IsEnabled = _theme.HasImageCrop || _theme.HasImageCropExpanded;
+        ClearCropBtn.IsEnabled = HasCrop(false) || HasCrop(true);
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)
