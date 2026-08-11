@@ -108,6 +108,35 @@ public partial class FolderWindow : Window
     private Border? _dropIndicator;          // 放置指示线
     private double _dragItemWidth, _dragItemHeight; // 拖动物品尺寸
 
+    // 音乐播放器相关
+    private MusicService? _musicService;
+    private FolderPlugin? _musicPlayerPlugin;
+    private Border? _musicPlayerCollapsed;
+    private Border? _musicPlayerExpanded;
+    private bool _musicPinned; // 音乐播放器是否固定展开
+
+    // 静态图标Geometry缓存（key: 类型+"_"+size），避免每次ApplyPlugins都创建新的Geometry对象造成GC卡顿
+    private static readonly Dictionary<string, Geometry> _geomCache = new();
+
+    // 折叠态UI元素引用
+    private TextBlock? _musicTitleMarquee;
+    private TextBlock? _musicArtistText;
+    private Border? _musicAlbumArt;
+    private Button? _musicPlayPauseBtn;
+    private Button? _musicPrevBtn;
+    private Button? _musicNextBtn;
+
+    // 展开态UI元素引用
+    private TextBlock? _musicExpandedTitle;
+    private TextBlock? _musicExpandedArtist;
+    private Button? _musicExpandedPlayPauseBtn;
+    private Button? _musicExpandedPrevBtn;
+    private Button? _musicExpandedNextBtn;
+    private Button? _musicPinBtn;
+    private ScrollViewer? _musicLyricsScroll;
+    private StackPanel? _musicLyricsPanel;
+    private readonly List<TextBlock> _musicLyricLineElements = new();
+
     private static SettingsService S => App.Settings;
 
     /// <summary>当前窗口对应的文件夹配置（供 App 删除时定位）</summary>
@@ -789,32 +818,75 @@ public partial class FolderWindow : Window
         BuildGrid();
         RecomputeTargets();
 
-        // 仅在展开起点一次性把窗口放大到「面板与折叠图标两者较大值」（这一次尺寸跳变会干净清除，无逐帧重排残影）；
-        // 取较大值保证折叠尺寸 > 展开尺寸时，收起动画期间折叠图标也不会被窗口裁切；
-        // 之后动画只缩放内部面板，图标左上角位置始终不变 → 文件夹从图标处向右下生长。
         Width = AnimWindowW();
         Height = AnimWindowH();
 
         CollapsedView.IsHitTestVisible = false;
         Panel.Visibility = Visibility.Visible;
-        _slotExpanded?.GifTimer?.Start(); // 展开面板可见时恢复其 GIF 动画
+        _slotExpanded?.GifTimer?.Start();
         Panel.Width = CollapsedW;
         Panel.Height = CollapsedH;
 
-        // 确保折叠态插件可见且透明度为1，参与展开动画
         PluginHostCollapsed.Visibility = Visibility.Visible;
         PluginHostCollapsed.Opacity = 1;
         AnimateTo(expand: true, d.AnimationMs);
+
+        // 如果有音乐播放器插件，更新折叠态UI的歌曲信息（展开态UI将在动画完成后延迟创建）
+        if (_musicPlayerPlugin != null)
+        {
+            try { UpdateMusicPlayerUI(); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[DeskFolder] Expand UpdateMusicPlayerUI error: {ex.Message}");
+            }
+        }
     }
 
     private void Collapse()
     {
         if (!_expanded || _animating || _contextMenuOpen || _settingsOpen) return;
+
+        if (_musicPinned && _musicPlayerPlugin != null)
+        {
+            return;
+        }
+
         _animating = true;
         _collapseTimer.Stop();
-        CollapsedView.Visibility = Visibility.Visible; // 收起动画期间渐显
-        // 收起动画比展开稍长，移出后视觉更从容（用户反馈收起太快）
+        CollapsedView.Visibility = Visibility.Visible;
         int ms = Math.Max((int)(S.Data.AnimationMs * 1.5), 300);
+
+        // 先清理展开态音乐UI，避免动画期间的引用问题
+        if (_musicPlayerExpanded != null && Panel != null)
+        {
+            try
+            {
+                var innerGrid = Panel.Child as Grid;
+                if (innerGrid != null)
+                {
+                    innerGrid.Children.Remove(_musicPlayerExpanded);
+                }
+            }
+            catch { }
+
+            _musicPlayerExpanded = null;
+
+            // 清除展开态UI元素引用
+            _musicExpandedTitle = null;
+            _musicExpandedArtist = null;
+            _musicExpandedPlayPauseBtn = null;
+            _musicExpandedPrevBtn = null;
+            _musicExpandedNextBtn = null;
+            _musicPinBtn = null;
+            _musicLyricsScroll = null;
+            _musicLyricsPanel = null;
+            _musicLyricLineElements.Clear();
+        }
+        if (IconScroller != null)
+        {
+            IconScroller.Visibility = Visibility.Visible;
+        }
+
         AnimateTo(expand: false, ms);
     }
 
@@ -892,8 +964,47 @@ public partial class FolderWindow : Window
                 CollapsedView.Visibility = Visibility.Collapsed;
                 CollapsedView.Opacity = 1;
                 PluginHostCollapsed.Opacity = 0;
-                PluginHostCollapsed.Visibility = Visibility.Collapsed; // 展开时隐藏折叠态插件
+                PluginHostCollapsed.Visibility = Visibility.Collapsed;
                 if (!IsMouseOver) _collapseTimer.Start();
+
+                // 如果有音乐播放器插件，延迟到动画帧之后创建展开态UI，避免卡顿
+                if (_musicPlayerPlugin != null && Panel != null)
+                {
+                    // 使用 BeginInvoke 延迟一帧，让动画完成后再创建大量 UI 元素
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (_musicPlayerPlugin == null || Panel == null || !_expanded) return;
+
+                            var innerGrid = Panel.Child as Grid;
+                            if (innerGrid == null) return;
+
+                            // 移除旧的音乐播放器展开UI
+                            if (_musicPlayerExpanded != null)
+                            {
+                                innerGrid.Children.Remove(_musicPlayerExpanded);
+                            }
+                            // 隐藏图标网格
+                            if (IconScroller != null) IconScroller.Visibility = Visibility.Collapsed;
+
+                            // 创建并添加音乐播放器展开UI
+                            var musicExpanded = BuildMusicPlayerExpanded(Panel.ActualWidth, Panel.ActualHeight);
+                            innerGrid.Children.Add(musicExpanded);
+                            Grid.SetColumn(musicExpanded, 0);
+                            Grid.SetColumnSpan(musicExpanded, 2);
+                            Grid.SetRow(musicExpanded, 0);
+                            Grid.SetRowSpan(musicExpanded, 3);
+
+                            // 立即更新展开态UI的歌曲信息
+                            UpdateMusicPlayerUI();
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[DeskFolder] BuildMusicPlayerExpanded deferred error: {ex.Message}");
+                        }
+                    }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                }
             }
             else
             {
@@ -947,7 +1058,7 @@ public partial class FolderWindow : Window
     private void Window_MouseLeave(object sender, MouseEventArgs e)
     {
         _hoverTimer.Stop();
-        if (_expanded && !_animating && !_contextMenuOpen && !_settingsOpen && !_gridItemDragging)
+        if (_expanded && !_animating && !_contextMenuOpen && !_settingsOpen && !_gridItemDragging && !_musicPinned)
             _collapseTimer.Start();
     }
 
@@ -1076,7 +1187,11 @@ public partial class FolderWindow : Window
         }
     }
 
-    private void CollapseButton_Click(object sender, RoutedEventArgs e) => Collapse();
+    private void CollapseButton_Click(object sender, RoutedEventArgs e)
+    {
+        _musicPinned = false; // 取消音乐播放器固定状态
+        Collapse();
+    }
 
     // ---------------- 右键菜单 / 文件夹设置 ----------------
 
@@ -1891,22 +2006,69 @@ public partial class FolderWindow : Window
     private void ApplyPlugins()
     {
         ClearPlugins();
+
+        // 检测是否包含音乐播放器插件（仅空文件夹生效）
+        bool folderEmpty = (_items?.Count ?? 0) == 0;
+        _musicPlayerPlugin = folderEmpty ? _config.Plugins?.FirstOrDefault(p => p.Type == FolderPluginType.MusicPlayer) : null;
+        if (_musicPlayerPlugin != null)
+        {
+            InitMusicService();
+        }
+        else
+        {
+            CleanupMusicService();
+        }
+
         if (_config.Plugins == null) return;
 
         // 折叠态：尺寸为 CollapsedW × CollapsedH（FolderChip）
-        // 折叠态插件仍然使用角落定位方式
         double cw = CollapsedW, ch = CollapsedH;
 
         foreach (var p in _config.Plugins)
         {
             if (p.Type == FolderPluginType.None) continue;
+            // 音乐播放器插件仅在空文件夹时显示
+            if (p.Type == FolderPluginType.MusicPlayer && !folderEmpty) continue;
             if (p.ShowOnCollapsed)
                 PluginHostCollapsed.Children.Add(RenderPlugin(p, true, cw, ch));
         }
 
-        // 展开态插件现在通过 BuildGrid 方法渲染到 IconGrid 中（网格布局）
-        // 不再通过 PluginHostExpanded 渲染，以避免重复
-        // BuildGrid 在展开时会自动处理展开态插件的渲染
+        // 如果是音乐播放器并且已经展开，延迟创建展开态音乐UI（避免阻塞）
+        if (_musicPlayerPlugin != null && _expanded && Panel != null)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (_musicPlayerPlugin == null || Panel == null || !_expanded) return;
+
+                    var innerGrid = Panel.Child as Grid;
+                    if (innerGrid == null) return;
+
+                    // 移除旧的音乐播放器展开UI
+                    if (_musicPlayerExpanded != null)
+                    {
+                        innerGrid.Children.Remove(_musicPlayerExpanded);
+                    }
+                    // 隐藏原本的内容网格
+                    if (IconScroller != null) IconScroller.Visibility = Visibility.Collapsed;
+
+                    var expandedMusic = BuildMusicPlayerExpanded(Panel.ActualWidth, Panel.ActualHeight);
+                    innerGrid.Children.Add(expandedMusic);
+                    Grid.SetColumn(expandedMusic, 0);
+                    Grid.SetColumnSpan(expandedMusic, 2);
+                    Grid.SetRow(expandedMusic, 0);
+                    Grid.SetRowSpan(expandedMusic, 3);
+
+                    // 立即更新展开态UI的歌曲信息
+                    UpdateMusicPlayerUI();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DeskFolder] ApplyPlugins deferred error: {ex.Message}");
+                }
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
     }
 
     private void ClearPlugins()
@@ -2234,6 +2396,7 @@ public partial class FolderWindow : Window
         FolderPluginType.CpuGauge => 54,
         FolderPluginType.WeatherBadge => 52,
         FolderPluginType.CalendarTile => 56,
+        FolderPluginType.MusicPlayer => 80, // 和文件夹尺寸相近，比文件夹小4px
         _ => 40
     };
 
@@ -2247,6 +2410,7 @@ public partial class FolderWindow : Window
             FolderPluginType.CpuGauge => BuildCpuGauge(p, size),
             FolderPluginType.WeatherBadge => BuildWeatherBadge(p, size),
             FolderPluginType.CalendarTile => BuildCalendarTile(p, size),
+            FolderPluginType.MusicPlayer => BuildMusicPlayerCollapsed(p, size),
             _ => new Border { Width = size, Height = size }
         };
     }
@@ -2461,24 +2625,24 @@ public partial class FolderWindow : Window
         };
         canvas.Children.Add(bg);
 
+        double cx = size / 2, cy = size / 2, r = size * 0.38;
+
         // 刻度弧（270° 量程，从 135° 到 405°）
         var arcPath = new System.Windows.Shapes.Path();
-        var geom = new StreamGeometry();
-        using (var ctx = geom.Open())
+        var geom = new PathGeometry();
         {
-            double cx = size / 2, cy = size / 2, r = size * 0.38;
             var start = PointOnCircle(cx, cy, r, 135);
             var end = PointOnCircle(cx, cy, r, 135 + 270);
-            ctx.BeginFigure(start, false, false);
-            ctx.ArcTo(end, new Size(r, r), 0, true, SweepDirection.Clockwise, true, false);
+            var fig = new PathFigure { StartPoint = start, IsClosed = false, IsFilled = false };
+            fig.Segments.Add(new ArcSegment(end, new Size(r, r), 0, true, SweepDirection.Clockwise, true));
+            geom.Figures.Add(fig);
         }
-        geom.Freeze();
         arcPath.Data = geom;
         arcPath.Stroke = new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF));
         arcPath.StrokeThickness = size * 0.08;
         canvas.Children.Add(arcPath);
 
-        // 动态数值弧
+        // 动态数值弧：每秒重建一次PathGeometry（1次/秒，GC无压力）
         var fg = new System.Windows.Shapes.Path
         {
             Stroke = new SolidColorBrush(col),
@@ -2501,25 +2665,27 @@ public partial class FolderWindow : Window
         // 每秒"采样"（平滑模拟，避免依赖 System.Management）
         double val = 15, target = 25;
         var rnd = new Random();
+        int lastPct = -1;
         void tick(object? s, EventArgs e)
         {
-            // 每 2 秒换一个新"目标值"
             if (rnd.NextDouble() < 0.5) target = rnd.Next(5, 95);
-            val = val * 0.65 + target * 0.35; // 平滑
+            val = val * 0.65 + target * 0.35;
             int pct = (int)Math.Clamp(val, 0, 100);
-            double angleDeg = 135 + pct * 2.7; // 0→135°, 100→405°
-            double cx = size / 2, cy = size / 2, r = size * 0.38;
-            var fgGeom = new StreamGeometry();
-            using (var ctx = fgGeom.Open())
+            double angleDeg = 135 + pct * 2.7;
+
+            // 只在数值变化时重建，避免无意义的重绘
+            if (pct != lastPct)
             {
-                var start = PointOnCircle(cx, cy, r, 135);
-                var end = PointOnCircle(cx, cy, r, angleDeg);
-                bool isLarge = angleDeg - 135 > 180;
-                ctx.BeginFigure(start, false, false);
-                ctx.ArcTo(end, new Size(r, r), 0, isLarge, SweepDirection.Clockwise, true, false);
+                lastPct = pct;
+                var fgGeom = new PathGeometry();
+                var fig = new PathFigure { StartPoint = PointOnCircle(cx, cy, r, 135), IsClosed = false, IsFilled = false };
+                fig.Segments.Add(new ArcSegment(
+                    PointOnCircle(cx, cy, r, angleDeg),
+                    new Size(r, r), 0, angleDeg - 135 > 180, SweepDirection.Clockwise, true));
+                fgGeom.Figures.Add(fig);
+                fg.Data = fgGeom;
             }
-            fgGeom.Freeze();
-            fg.Data = fgGeom;
+
             txt.Text = pct.ToString() + "%";
             txt.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var sz = txt.DesiredSize;
@@ -2650,7 +2816,956 @@ public partial class FolderWindow : Window
         return card;
     }
 
-    // ---- 工具：角度→点 ----
+    // ===== 插件 7：音乐播放器 =====
+    private FrameworkElement BuildMusicPlayerCollapsed(FolderPlugin p, double size)
+    {
+        // 音乐播放器在折叠态下占据整个文件夹（size - 4px margin）
+        double w = size;
+        double h = size;
+        double pad = 2; // 4px total margin (2px each side)
+
+        var root = new Border
+        {
+            Width = w - pad * 2,
+            Height = h - pad * 2,
+            CornerRadius = new CornerRadius(14),
+            Background = Brushes.Transparent,
+            Margin = new Thickness(pad),
+            ClipToBounds = true,
+            IsHitTestVisible = true
+        };
+
+        var outerGrid = new Grid();
+        outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 顶部：歌曲信息
+        outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(size * 0.18) }); // 底部：控制按钮
+
+        // === 顶部区域 ===
+        var topArea = new Grid();
+        topArea.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 专辑封面
+        topArea.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 歌曲信息
+        topArea.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 上箭头按钮
+
+        // 专辑封面（左侧）
+        double albumSize = Math.Min(w - pad * 2, h - pad * 2) * 0.5;
+        var albumArt = new Border
+        {
+            Width = albumSize,
+            Height = albumSize,
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(Color.FromArgb(0x60, 0x44, 0x44, 0x44)),
+            Margin = new Thickness(6, 6, 4, 4),
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        _musicAlbumArt = albumArt;
+
+        // 专辑封面默认内容（彩色圆形+K字代表酷狗）
+        var albumContent = new Grid();
+        var albumBg = new Border
+        {
+            Background = new LinearGradientBrush(
+                Color.FromRgb(0x4A, 0x90, 0xE2),
+                Color.FromRgb(0x1A, 0x23, 0x7E),
+                new Point(0, 0), new Point(1, 1)),
+            CornerRadius = new CornerRadius(8)
+        };
+        albumContent.Children.Add(albumBg);
+
+        var kugouLogo = new TextBlock
+        {
+            Text = "K",
+            Foreground = Brushes.White,
+            FontSize = albumSize * 0.35,
+            FontWeight = FontWeights.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        albumContent.Children.Add(kugouLogo);
+        albumArt.Child = albumContent;
+
+        // 点击专辑封面打开酷狗
+        albumArt.MouseLeftButtonDown += (_, _) =>
+        {
+            _musicService?.OpenKugou();
+        };
+
+        Grid.SetColumn(albumArt, 0);
+        topArea.Children.Add(albumArt);
+
+        // 歌曲信息（中间）
+        var infoPanel = new StackPanel
+        {
+            Margin = new Thickness(6, 8, 4, 4),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        // 歌曲名（流动显示）
+        var titleTb = new TextBlock
+        {
+            Text = "未检测到音乐",
+            Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+            FontSize = Math.Max(10, w * 0.06),
+            FontWeight = FontWeights.Medium,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = Math.Max(10, w - pad * 2 - albumSize - 40)
+        };
+        _musicTitleMarquee = titleTb;
+        infoPanel.Children.Add(titleTb);
+
+        // 艺术家
+        var artistTb = new TextBlock
+        {
+            Text = "请打开酷狗音乐",
+            Foreground = new SolidColorBrush(Color.FromArgb(0xBB, 0xFF, 0xFF, 0xFF)),
+            FontSize = Math.Max(8, w * 0.045),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = Math.Max(10, w - pad * 2 - albumSize - 40)
+        };
+        _musicArtistText = artistTb;
+        infoPanel.Children.Add(artistTb);
+
+        Grid.SetColumn(infoPanel, 1);
+        topArea.Children.Add(infoPanel);
+
+        // 上箭头按钮（右上角）
+        double btnSize = Math.Max(16, w * 0.1);
+        var expandBtn = new Button
+        {
+            Width = btnSize,
+            Height = btnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "展开播放器"
+        };
+        var expandPath = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("uparrow", btnSize, CreateUpArrowPath),
+            Fill = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF))
+        };
+        expandBtn.Content = expandPath;
+        expandBtn.Click += (_, _) =>
+        {
+            // 切换展开状态
+            if (_expanded)
+                Collapse();
+            else
+                Expand();
+        };
+        Grid.SetColumn(expandBtn, 2);
+        expandBtn.HorizontalAlignment = HorizontalAlignment.Right;
+        expandBtn.Margin = new Thickness(0, 4, 6, 0);
+        topArea.Children.Add(expandBtn);
+
+        Grid.SetRow(topArea, 0);
+        outerGrid.Children.Add(topArea);
+
+        // === 底部控制栏 ===
+        var controls = new Grid
+        {
+            Margin = new Thickness(8, 0, 8, 6)
+        };
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 收藏
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 分隔
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 上一曲
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 播放/暂停
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 下一曲
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 分隔
+
+        double ctrlBtnSize = Math.Max(18, Math.Min(w * 0.1, h * 0.12));
+        var ctrlForeground = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF));
+
+        // 收藏按钮（左侧心形）
+        var favBtn = new Button
+        {
+            Width = ctrlBtnSize,
+            Height = ctrlBtnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "收藏"
+        };
+        favBtn.Content = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("heart", ctrlBtnSize, CreateHeartPath),
+            Fill = ctrlForeground
+        };
+        Grid.SetColumn(favBtn, 0);
+        controls.Children.Add(favBtn);
+
+        // 上一曲按钮
+        var prevBtn = new Button
+        {
+            Width = ctrlBtnSize,
+            Height = ctrlBtnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "上一曲"
+        };
+        prevBtn.Content = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("prev", ctrlBtnSize, CreatePrevPath),
+            Fill = ctrlForeground
+        };
+        prevBtn.Click += (_, _) => _musicService?.PrevTrack();
+        _musicPrevBtn = prevBtn;
+        Grid.SetColumn(prevBtn, 2);
+        controls.Children.Add(prevBtn);
+
+        // 播放/暂停按钮（中间最大）
+        double playSize = ctrlBtnSize * 1.2;
+        var playBtn = new Button
+        {
+            Width = playSize,
+            Height = playSize,
+            Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "播放/暂停",
+            Margin = new Thickness(4, 0, 4, 0)
+        };
+        playBtn.Content = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("play", playSize, CreatePlayPath),
+            Fill = ctrlForeground
+        };
+        playBtn.Click += (_, _) => _musicService?.PlayPause();
+        _musicPlayPauseBtn = playBtn;
+        Grid.SetColumn(playBtn, 3);
+        controls.Children.Add(playBtn);
+
+        // 下一曲按钮
+        var nextBtn = new Button
+        {
+            Width = ctrlBtnSize,
+            Height = ctrlBtnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "下一曲"
+        };
+        nextBtn.Content = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("next", ctrlBtnSize, CreateNextPath),
+            Fill = ctrlForeground
+        };
+        nextBtn.Click += (_, _) => _musicService?.NextTrack();
+        _musicNextBtn = nextBtn;
+        Grid.SetColumn(nextBtn, 4);
+        controls.Children.Add(nextBtn);
+
+        Grid.SetRow(controls, 1);
+        outerGrid.Children.Add(controls);
+
+        root.Child = outerGrid;
+        _musicPlayerCollapsed = root;
+        return root;
+    }
+
+    /// <summary>获取静态图标（优先走缓存，PathGeometry+Freeze）</summary>
+    private static Geometry GetOrCreateGeom(string key, double size, Func<double, Geometry> factory)
+    {
+        // 量化到最近的2像素，避免缓存条目爆炸
+        int qs = (int)Math.Round(size / 2.0) * 2;
+        string fullKey = $"{key}_{qs}";
+        if (_geomCache.TryGetValue(fullKey, out var cached)) return cached;
+        var g = factory(qs);
+        try { if (g.CanFreeze) g.Freeze(); } catch { /* ignore */ }
+        _geomCache[fullKey] = g;
+        return g;
+    }
+
+    /// <summary>创建上箭头路径（PathGeometry，无 ByteStream 风险）</summary>
+    private static Geometry CreateUpArrowPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig = new PathFigure { StartPoint = new Point(s * 0.2, s * 0.5), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new LineSegment(new Point(s * 0.5, s * 0.2), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.8, s * 0.5), true));
+        g.Figures.Add(fig);
+        return g;
+    }
+
+    /// <summary>创建心形路径</summary>
+    private static Geometry CreateHeartPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig = new PathFigure { StartPoint = new Point(s * 0.5, s * 0.85), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new LineSegment(new Point(s * 0.15, s * 0.5), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.15, s * 0.3), true));
+        fig.Segments.Add(new ArcSegment(new Point(s * 0.35, s * 0.2), new Size(s * 0.2, s * 0.2), 0, false, SweepDirection.Clockwise, true));
+        fig.Segments.Add(new ArcSegment(new Point(s * 0.5, s * 0.35), new Size(s * 0.2, s * 0.2), 0, false, SweepDirection.Clockwise, true));
+        fig.Segments.Add(new ArcSegment(new Point(s * 0.65, s * 0.2), new Size(s * 0.2, s * 0.2), 0, false, SweepDirection.Clockwise, true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.85, s * 0.3), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.85, s * 0.5), true));
+        g.Figures.Add(fig);
+        return g;
+    }
+
+    /// <summary>创建上一曲路径</summary>
+    private static Geometry CreatePrevPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig1 = new PathFigure { StartPoint = new Point(s * 0.7, s * 0.2), IsClosed = true, IsFilled = true };
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.7, s * 0.8), true));
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.3, s * 0.5), true));
+        g.Figures.Add(fig1);
+        var fig2 = new PathFigure { StartPoint = new Point(s * 0.5, s * 0.2), IsClosed = true, IsFilled = true };
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.5, s * 0.8), true));
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.1, s * 0.5), true));
+        g.Figures.Add(fig2);
+        return g;
+    }
+
+    /// <summary>创建播放路径</summary>
+    private static Geometry CreatePlayPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig = new PathFigure { StartPoint = new Point(s * 0.35, s * 0.2), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new LineSegment(new Point(s * 0.35, s * 0.8), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.75, s * 0.5), true));
+        g.Figures.Add(fig);
+        return g;
+    }
+
+    /// <summary>创建暂停路径</summary>
+    private static Geometry CreatePausePath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig1 = new PathFigure { StartPoint = new Point(s * 0.3, s * 0.2), IsClosed = true, IsFilled = true };
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.45, s * 0.2), true));
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.45, s * 0.8), true));
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.3, s * 0.8), true));
+        g.Figures.Add(fig1);
+        var fig2 = new PathFigure { StartPoint = new Point(s * 0.55, s * 0.2), IsClosed = true, IsFilled = true };
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.7, s * 0.2), true));
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.7, s * 0.8), true));
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.55, s * 0.8), true));
+        g.Figures.Add(fig2);
+        return g;
+    }
+
+    /// <summary>创建下一曲路径</summary>
+    private static Geometry CreateNextPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig1 = new PathFigure { StartPoint = new Point(s * 0.3, s * 0.2), IsClosed = true, IsFilled = true };
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.3, s * 0.8), true));
+        fig1.Segments.Add(new LineSegment(new Point(s * 0.7, s * 0.5), true));
+        g.Figures.Add(fig1);
+        var fig2 = new PathFigure { StartPoint = new Point(s * 0.5, s * 0.2), IsClosed = true, IsFilled = true };
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.5, s * 0.8), true));
+        fig2.Segments.Add(new LineSegment(new Point(s * 0.9, s * 0.5), true));
+        g.Figures.Add(fig2);
+        return g;
+    }
+
+    /// <summary>创建固定（图钉）图标路径</summary>
+    private static Geometry CreatePinPath(double size)
+    {
+        double s = size;
+        var g = new PathGeometry();
+        var fig = new PathFigure { StartPoint = new Point(s * 0.5, s * 0.1), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new LineSegment(new Point(s * 0.7, s * 0.3), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.6, s * 0.35), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.6, s * 0.7), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.4, s * 0.9), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.35, s * 0.65), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.25, s * 0.6), true));
+        fig.Segments.Add(new LineSegment(new Point(s * 0.3, s * 0.3), true));
+        g.Figures.Add(fig);
+        return g;
+    }
+
+    // ===== 音乐播放器：展开态UI =====
+
+    /// <summary>
+    /// 构建展开态音乐播放器UI（作为Panel的子元素覆盖显示）
+    /// </summary>
+    private Border BuildMusicPlayerExpanded(double width, double height)
+    {
+        var root = new Border
+        {
+            Width = width,
+            Height = height,
+            CornerRadius = new CornerRadius(16),
+            Background = Brushes.Transparent,
+            ClipToBounds = true
+        };
+
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 顶部歌曲信息
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 中间歌词区
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 底部控制栏
+
+        // === 顶部：歌曲信息 + 固定按钮 + 收起按钮 ===
+        var topBar = new Grid
+        {
+            Margin = new Thickness(12, 8, 8, 4)
+        };
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 专辑
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 歌名+艺术家
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 固定按钮
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // 收起按钮
+
+        double expandedAlbumSize = Math.Min(width * 0.2, height * 0.25);
+        var expAlbumArt = new Border
+        {
+            Width = expandedAlbumSize,
+            Height = expandedAlbumSize,
+            CornerRadius = new CornerRadius(10),
+            Background = new SolidColorBrush(Color.FromArgb(0x60, 0x44, 0x44, 0x44)),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Margin = new Thickness(0, 0, 10, 0)
+        };
+        var expAlbumContent = new Grid();
+        var expAlbumBg = new Border
+        {
+            Background = new LinearGradientBrush(
+                Color.FromRgb(0x4A, 0x90, 0xE2),
+                Color.FromRgb(0x1A, 0x23, 0x7E),
+                new Point(0, 0), new Point(1, 1)),
+            CornerRadius = new CornerRadius(10)
+        };
+        expAlbumContent.Children.Add(expAlbumBg);
+        var expKLogo = new TextBlock
+        {
+            Text = "K",
+            Foreground = Brushes.White,
+            FontSize = expandedAlbumSize * 0.35,
+            FontWeight = FontWeights.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        expAlbumContent.Children.Add(expKLogo);
+        expAlbumArt.Child = expAlbumContent;
+        expAlbumArt.MouseLeftButtonDown += (_, _) => _musicService?.OpenKugou();
+        Grid.SetColumn(expAlbumArt, 0);
+        topBar.Children.Add(expAlbumArt);
+
+        // 歌曲名 + 艺术家
+        var titlePanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var expTitle = new TextBlock
+        {
+            Text = "未检测到音乐",
+            Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+            FontSize = Math.Max(12, width * 0.04),
+            FontWeight = FontWeights.Bold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = width * 0.5
+        };
+        _musicExpandedTitle = expTitle;
+        titlePanel.Children.Add(expTitle);
+
+        var expArtist = new TextBlock
+        {
+            Text = "请打开酷狗音乐",
+            Foreground = new SolidColorBrush(Color.FromArgb(0xBB, 0xFF, 0xFF, 0xFF)),
+            FontSize = Math.Max(10, width * 0.03),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        _musicExpandedArtist = expArtist;
+        titlePanel.Children.Add(expArtist);
+        Grid.SetColumn(titlePanel, 1);
+        topBar.Children.Add(titlePanel);
+
+        // 固定按钮（右上角）
+        double pinBtnSize = Math.Max(20, width * 0.04);
+        var pinBtn = new Button
+        {
+            Width = pinBtnSize,
+            Height = pinBtnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "固定展开状态",
+            Margin = new Thickness(4, 0, 4, 0)
+        };
+        var pinPath = new System.Windows.Shapes.Path
+        {
+            Data = GetOrCreateGeom("pin", pinBtnSize, CreatePinPath),
+            Fill = new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF))
+        };
+        pinBtn.Content = pinPath;
+        pinBtn.Click += (_, _) =>
+        {
+            _musicPinned = !_musicPinned;
+            pinPath.Fill = _musicPinned
+                ? new SolidColorBrush(Color.FromArgb(0xFF, 0xFF, 0x8C, 0x00))
+                : new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+            pinBtn.ToolTip = _musicPinned ? "取消固定" : "固定展开状态";
+        };
+        _musicPinBtn = pinBtn;
+        Grid.SetColumn(pinBtn, 2);
+        topBar.Children.Add(pinBtn);
+
+        // 收起按钮
+        double collapseBtnSize = Math.Max(20, width * 0.04);
+        var collapseBtn = new Button
+        {
+            Width = collapseBtnSize,
+            Height = collapseBtnSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "收起",
+            Content = new TextBlock
+            {
+                Text = "×",
+                Foreground = new SolidColorBrush(Color.FromArgb(0xBB, 0xFF, 0xFF, 0xFF)),
+                FontSize = collapseBtnSize * 0.8,
+                FontWeight = FontWeights.Bold
+            }
+        };
+        collapseBtn.Click += (_, _) =>
+        {
+            _musicPinned = false;
+            Collapse();
+        };
+        Grid.SetColumn(collapseBtn, 3);
+        topBar.Children.Add(collapseBtn);
+
+        Grid.SetRow(topBar, 0);
+        grid.Children.Add(topBar);
+
+        // === 中间：歌词显示区（纯歌词，无播放列表） ===
+        var lyricsArea = new Grid
+        {
+            Margin = new Thickness(16, 4, 16, 4)
+        };
+
+        // 歌词滚动容器
+        var lyricsScroll = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            CanContentScroll = false,
+            IsHitTestVisible = false,
+            Focusable = false
+        };
+
+        // 使用 OpacityMask 实现歌词上下边缘虚化
+        var fadeBrush = new LinearGradientBrush
+        {
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(0, 1),
+            GradientStops = new GradientStopCollection
+            {
+                new GradientStop(Color.FromArgb(0x00, 0x00, 0x00, 0x00), 0.0),
+                new GradientStop(Color.FromArgb(0xFF, 0x00, 0x00, 0x00), 0.15),
+                new GradientStop(Color.FromArgb(0xFF, 0x00, 0x00, 0x00), 0.85),
+                new GradientStop(Color.FromArgb(0x00, 0x00, 0x00, 0x00), 1.0)
+            }
+        };
+        lyricsScroll.OpacityMask = fadeBrush;
+
+        // 歌词面板（动态填充 TextBlock）
+        var lyricsPanel = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        // 默认占位
+        var placeholder = new TextBlock
+        {
+            Text = "暂无歌词",
+            Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x90, 0xE2)),
+            FontSize = Math.Max(12, width * 0.03),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(0, 20, 0, 20)
+        };
+        lyricsPanel.Children.Add(placeholder);
+
+        lyricsScroll.Content = lyricsPanel;
+        lyricsArea.Children.Add(lyricsScroll);
+
+        _musicLyricsScroll = lyricsScroll;
+        _musicLyricsPanel = lyricsPanel;
+
+        Grid.SetRow(lyricsArea, 1);
+        grid.Children.Add(lyricsArea);
+
+        // === 底部控制栏（与折叠态相同）===
+        var expControls = new Grid
+        {
+            Margin = new Thickness(12, 4, 12, 10)
+        };
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        expControls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        double expCtrlSize = Math.Max(22, Math.Min(width * 0.05, height * 0.07));
+        var ctrlFg = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF));
+
+        // 收藏
+        var expFav = new Button
+        {
+            Width = expCtrlSize,
+            Height = expCtrlSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Content = new System.Windows.Shapes.Path { Data = GetOrCreateGeom("heart", expCtrlSize, CreateHeartPath), Fill = ctrlFg }
+        };
+        Grid.SetColumn(expFav, 0);
+        expControls.Children.Add(expFav);
+
+        // 上一曲
+        var expPrev = new Button
+        {
+            Width = expCtrlSize,
+            Height = expCtrlSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Content = new System.Windows.Shapes.Path { Data = GetOrCreateGeom("prev", expCtrlSize, CreatePrevPath), Fill = ctrlFg }
+        };
+        expPrev.Click += (_, _) => _musicService?.PrevTrack();
+        _musicExpandedPrevBtn = expPrev;
+        Grid.SetColumn(expPrev, 2);
+        expControls.Children.Add(expPrev);
+
+        // 播放/暂停
+        double expPlaySize = expCtrlSize * 1.3;
+        var expPlay = new Button
+        {
+            Width = expPlaySize,
+            Height = expPlaySize,
+            Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Margin = new Thickness(6, 0, 6, 0),
+            Content = new System.Windows.Shapes.Path { Data = GetOrCreateGeom("play", expPlaySize, CreatePlayPath), Fill = ctrlFg }
+        };
+        expPlay.Click += (_, _) => _musicService?.PlayPause();
+        _musicExpandedPlayPauseBtn = expPlay;
+        Grid.SetColumn(expPlay, 3);
+        expControls.Children.Add(expPlay);
+
+        // 下一曲
+        var expNext = new Button
+        {
+            Width = expCtrlSize,
+            Height = expCtrlSize,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Content = new System.Windows.Shapes.Path { Data = GetOrCreateGeom("next", expCtrlSize, CreateNextPath), Fill = ctrlFg }
+        };
+        expNext.Click += (_, _) => _musicService?.NextTrack();
+        _musicExpandedNextBtn = expNext;
+        Grid.SetColumn(expNext, 4);
+        expControls.Children.Add(expNext);
+
+        Grid.SetRow(expControls, 2);
+        grid.Children.Add(expControls);
+
+        root.Child = grid;
+        _musicPlayerExpanded = root;
+        return root;
+    }
+
+    /// <summary>
+    /// 更新音乐播放器UI（歌曲信息变化时调用）
+    /// </summary>
+    private void UpdateMusicPlayerUI()
+    {
+        if (_musicService == null || _musicPlayerPlugin == null) return;
+
+        try
+        {
+            string title = _musicService.CurrentTitle;
+            string artist = _musicService.CurrentArtist;
+
+            string titleDisplay = string.IsNullOrEmpty(title) ? "未检测到音乐" : title;
+            string artistDisplay = string.IsNullOrEmpty(artist) ? "请打开酷狗音乐" : artist;
+
+            // 更新折叠态UI（仅在值实际变化时更新，避免无意义重绘）
+            if (_musicTitleMarquee != null && _musicTitleMarquee.Text != titleDisplay)
+                _musicTitleMarquee.Text = titleDisplay;
+            if (_musicArtistText != null && _musicArtistText.Text != artistDisplay)
+                _musicArtistText.Text = artistDisplay;
+
+            // 更新展开态UI（如果存在且值变化）
+            if (_musicExpandedTitle != null && _musicExpandedTitle.Text != titleDisplay)
+                _musicExpandedTitle.Text = titleDisplay;
+            if (_musicExpandedArtist != null && _musicExpandedArtist.Text != artistDisplay)
+                _musicExpandedArtist.Text = artistDisplay;
+
+            // 重建歌词面板
+            RebuildLyricsPanel();
+
+            // 更新播放/暂停图标
+            UpdatePlayPauseIcon(_musicPlayPauseBtn);
+            UpdatePlayPauseIcon(_musicExpandedPlayPauseBtn);
+
+            // 更新歌词高亮和滚动位置
+            UpdateLyricsPosition();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] UpdateMusicPlayerUI error: {ex.Message}");
+        }
+    }
+
+    /// <summary>重建歌词面板（歌词数据变化时调用）</summary>
+    private void RebuildLyricsPanel()
+    {
+        if (_musicLyricsPanel == null || _musicService == null) return;
+
+        try
+        {
+            _musicLyricLineElements.Clear();
+            _musicLyricsPanel.Children.Clear();
+
+            var lyrics = _musicService.CurrentLyrics;
+            if (lyrics.Count == 0)
+            {
+                // 显示占位文本（正在加载或无歌词）
+                var placeholder = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(_musicService.CurrentTitle) ? "未检测到音乐" : "歌词加载中...",
+                    Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x90, 0xE2)),
+                    FontSize = 14,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    TextAlignment = TextAlignment.Center,
+                    Margin = new Thickness(0, 20, 0, 20)
+                };
+                _musicLyricsPanel.Children.Add(placeholder);
+                return;
+            }
+
+            // 字体大小：用户设置 > 自动按宽度缩放
+            double baseFontSize = 14;
+            if (_musicPlayerPlugin != null && _musicPlayerPlugin.LyricFontSize > 0)
+                baseFontSize = _musicPlayerPlugin.LyricFontSize;
+            else if (_musicPlayerExpanded != null)
+                baseFontSize = Math.Max(12, _musicPlayerExpanded.ActualWidth * 0.03);
+
+            // 歌词最大宽度：限制不超出文件夹框
+            double maxTextWidth = (_musicPlayerExpanded?.ActualWidth ?? 300) * 0.85;
+
+            // 顶部留白：让第一句歌词能居中显示
+            double scrollHeight = _musicLyricsScroll?.ActualHeight > 0 ? _musicLyricsScroll.ActualHeight : 200;
+            var topSpacer = new FrameworkElement
+            {
+                Height = scrollHeight / 2 - baseFontSize,
+                Visibility = Visibility.Visible
+            };
+            _musicLyricsPanel.Children.Add(topSpacer);
+
+            foreach (var line in lyrics)
+            {
+                var linePanel = new StackPanel
+                {
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 3, 0, 3)
+                };
+
+                var textBlock = new TextBlock
+                {
+                    Text = line.Text,
+                    FontSize = baseFontSize,
+                    Foreground = new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    TextAlignment = TextAlignment.Center,
+                    FontWeight = FontWeights.Normal,
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = maxTextWidth
+                };
+                linePanel.Children.Add(textBlock);
+
+                // 翻译行
+                if (line.HasTranslation)
+                {
+                    var transBlock = new TextBlock
+                    {
+                        Text = line.Translation,
+                        FontSize = baseFontSize * 0.8,
+                        Foreground = new SolidColorBrush(Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF)),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        TextAlignment = TextAlignment.Center,
+                        Margin = new Thickness(0, 1, 0, 0),
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = maxTextWidth * 0.9
+                    };
+                    linePanel.Children.Add(transBlock);
+                }
+
+                _musicLyricsPanel.Children.Add(linePanel);
+                _musicLyricLineElements.Add(textBlock);
+            }
+
+            // 底部留白：让最后一句歌词能居中显示
+            var bottomSpacer = new FrameworkElement
+            {
+                Height = scrollHeight / 2 - baseFontSize,
+                Visibility = Visibility.Visible
+            };
+            _musicLyricsPanel.Children.Add(bottomSpacer);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] RebuildLyricsPanel error: {ex.Message}");
+        }
+    }
+
+    /// <summary>更新歌词高亮和滚动位置（歌词进度变化时调用）</summary>
+    private void UpdateLyricsPosition()
+    {
+        if (_musicLyricsScroll == null || _musicService == null) return;
+
+        try
+        {
+            int currentIndex = _musicService.CurrentLyricIndex;
+            var lyrics = _musicService.CurrentLyrics;
+
+            // 更新所有行的高亮状态
+            for (int i = 0; i < _musicLyricLineElements.Count; i++)
+            {
+                var tb = _musicLyricLineElements[i];
+                if (i == currentIndex)
+                {
+                    // 当前行：酷狗蓝 + 加粗
+                    tb.Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x90, 0xE2));
+                    tb.FontWeight = FontWeights.Bold;
+                }
+                else
+                {
+                    // 非当前行：白色按距离渐暗
+                    double distance = currentIndex >= 0 ? Math.Abs(i - currentIndex) : 0;
+                    byte alpha = distance switch
+                    {
+                        0 => 0xFF,
+                        1 => 0xCC,
+                        2 => 0x99,
+                        3 => 0x66,
+                        _ => 0x40
+                    };
+                    tb.Foreground = new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF));
+                    tb.FontWeight = FontWeights.Normal;
+                }
+            }
+
+            // 滚动到当前行（居中）
+            if (currentIndex >= 0 && currentIndex < _musicLyricLineElements.Count && _musicLyricsScroll != null && _musicLyricsPanel != null)
+            {
+                var targetLine = _musicLyricLineElements[currentIndex];
+                // 计算目标滚动偏移：让当前行居中
+                double targetY = targetLine.TransformToAncestor(_musicLyricsPanel).Transform(new Point(0, 0)).Y;
+                double scrollHeight = _musicLyricsScroll.ActualHeight;
+                double panelHeight = _musicLyricsPanel.ActualHeight;
+                double offset = targetY - scrollHeight / 2 + targetLine.ActualHeight / 2;
+                // 限制在有效范围内
+                double maxOffset = panelHeight - scrollHeight;
+                offset = Math.Max(0, Math.Min(offset, maxOffset > 0 ? maxOffset : 0));
+                _musicLyricsScroll.ScrollToVerticalOffset(offset);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] UpdateLyricsPosition error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 更新播放/暂停按钮图标
+    /// </summary>
+    private void UpdatePlayPauseIcon(Button? button)
+    {
+        if (button == null || _musicService == null) return;
+
+        try
+        {
+            double btnSize = Math.Max(16, button.Width > 0 ? button.Width : 24);
+            var path = _musicService.IsPlaying
+                ? GetOrCreateGeom("pause", btnSize, CreatePausePath)
+                : GetOrCreateGeom("play", btnSize, CreatePlayPath);
+            var fillBrush = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF));
+
+            if (button.Content is System.Windows.Shapes.Path existingPath)
+            {
+                existingPath.Data = path;
+                existingPath.Fill = fillBrush;
+            }
+            else
+            {
+                button.Content = new System.Windows.Shapes.Path
+                {
+                    Data = path,
+                    Fill = fillBrush
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] UpdatePlayPauseIcon error: {ex.Message}");
+        }
+    }
+
+    /// <summary>初始化音乐播放器服务（当文件夹包含 MusicPlayer 插件时调用）</summary>
+    private void InitMusicService()
+    {
+        if (_musicService != null) return;
+
+        _musicService = new MusicService();
+        _musicService.SongInfoChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateMusicPlayerUI));
+        // 播放状态变化：只更新图标，不重建歌词面板（避免丢失滚动位置）
+        _musicService.PlaybackStateChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdatePlayPauseIconsOnly));
+        _musicService.LyricsChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateMusicPlayerUI));
+        // 歌词位置变化：仅更新高亮和滚动，不重建面板（高频事件，轻量处理）
+        _musicService.LyricsPositionChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateLyricsPosition));
+        _musicService.Start();
+    }
+
+    /// <summary>仅更新播放/暂停图标（不触发歌词面板重建）</summary>
+    private void UpdatePlayPauseIconsOnly()
+    {
+        try
+        {
+            UpdatePlayPauseIcon(_musicPlayPauseBtn);
+            UpdatePlayPauseIcon(_musicExpandedPlayPauseBtn);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] UpdatePlayPauseIconsOnly error: {ex.Message}");
+        }
+    }
+
+    /// <summary>清理音乐播放器服务</summary>
+    private void CleanupMusicService()
+    {
+        if (_musicService != null)
+        {
+            _musicService.Stop();
+            _musicService.Dispose();
+            _musicService = null;
+        }
+        _musicPlayerPlugin = null;
+        _musicPlayerCollapsed = null;
+        _musicPlayerExpanded = null;
+        _musicPinned = false;
+        _musicExpandedTitle = null;
+        _musicExpandedArtist = null;
+        _musicExpandedPlayPauseBtn = null;
+        _musicExpandedPrevBtn = null;
+        _musicExpandedNextBtn = null;
+        _musicPinBtn = null;
+        _musicLyricsScroll = null;
+        _musicLyricsPanel = null;
+        _musicLyricLineElements.Clear();
+    }
     private static Point PointOnCircle(double cx, double cy, double r, double angleDeg)
     {
         double rad = angleDeg * Math.PI / 180.0;

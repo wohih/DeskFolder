@@ -248,7 +248,9 @@ public enum FolderPluginType
     /// <summary>天气徽章：显示城市天气图标 + 温度（本地配置，需手动填写）</summary>
     WeatherBadge,
     /// <summary>日历小方块：显示当前日期数字</summary>
-    CalendarTile
+    CalendarTile,
+    /// <summary>音乐播放器：检测酷狗音乐并显示歌曲信息/歌词/播放控制</summary>
+    MusicPlayer
 }
 
 /// <summary>插件网格尺寸类型：决定插件在网格中占用的单元格大小。</summary>
@@ -292,6 +294,8 @@ public class FolderPlugin
     public double ExpandedOffsetX { get; set; } = 0;
     /// <summary>展开态偏移 Y（像素，相对角位置微调，仅角落模式使用）</summary>
     public double ExpandedOffsetY { get; set; } = 0;
+    /// <summary>音乐播放器歌词字体大小（0=自动按文件夹宽度缩放）</summary>
+    public double LyricFontSize { get; set; } = 0;
 
     // ===== 网格布局相关（展开态网格使用） =====
     /// <summary>网格占位尺寸：1×1 / 1×2 / 2×1 / 2×2</summary>

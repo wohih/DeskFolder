@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using DeskFolder.Services;
 using DeskFolder.Views;
@@ -13,26 +14,91 @@ public partial class App : System.Windows.Application
 
     public static SettingsService Settings { get; private set; } = null!;
 
+    // crash.log 写入目录（exe同级+AppData双写，确保用户能找到）
+    private static string CrashLogDir
+    {
+        get
+        {
+            try
+            {
+                var exeDir = Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName)
+                             ?? AppDomain.CurrentDomain.BaseDirectory;
+                Directory.CreateDirectory(exeDir);
+                return exeDir;
+            }
+            catch
+            {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DeskFolder");
+            }
+        }
+    }
+
+    private static void WriteCrashLog(Exception ex, string source)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"===== [{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ({source}) =====");
+            sb.AppendLine($"Message: {ex.Message}");
+            sb.AppendLine();
+            sb.AppendLine("Stack Trace:");
+            sb.AppendLine(ex.StackTrace ?? "(no stack trace)");
+            // 递归 InnerException
+            int depth = 0;
+            var inner = ex.InnerException;
+            while (inner != null && depth < 10)
+            {
+                depth++;
+                sb.AppendLine();
+                sb.AppendLine($"--- InnerException #{depth} ---");
+                sb.AppendLine($"Message: {inner.Message}");
+                sb.AppendLine("Stack Trace:");
+                sb.AppendLine(inner.StackTrace ?? "(no stack trace)");
+                inner = inner.InnerException;
+            }
+            sb.AppendLine();
+            sb.AppendLine(new string('=', 60));
+            sb.AppendLine();
+
+            // 写入 exe 同级目录 + AppData 双写
+            string logFile = Path.Combine(CrashLogDir, "crash.log");
+            File.AppendAllText(logFile, sb.ToString());
+
+            string appDataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DeskFolder");
+            Directory.CreateDirectory(appDataDir);
+            File.AppendAllText(Path.Combine(appDataDir, "crash.log"), sb.ToString());
+        }
+        catch
+        {
+            // 日志写入本身失败则彻底忽略
+        }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        // 全局兜底：任何 UI 线程未处理异常都弹出错误并写入日志，避免直接"闪退"丢失现场
+        // 全局兜底：UI 线程未处理异常（静默写入日志，不弹窗，避免阻塞 UI）
         DispatcherUnhandledException += (_, ex) =>
         {
-            try
-            {
-                var dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DeskFolder");
-                Directory.CreateDirectory(dir);
-                File.AppendAllText(Path.Combine(dir, "crash.log"),
-                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex.Exception}\n\n");
-            }
-            catch { /* 忽略日志写入失败 */ }
-            MessageBox.Show(
-                $"发生未处理的错误：\n{ex.Exception.Message}\n\n（详细堆栈已记录到 crash.log）",
-                "DeskFolder 错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            WriteCrashLog(ex.Exception, "DispatcherUnhandledException");
             ex.Handled = true;
+        };
+
+        // 非 UI 线程异常兜底
+        AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
+        {
+            if (ex.ExceptionObject is Exception exc)
+                WriteCrashLog(exc, "AppDomain.UnhandledException");
+        };
+
+        // Task 未观察异常兜底
+        TaskScheduler.UnobservedTaskException += (_, ex) =>
+        {
+            WriteCrashLog(ex.Exception, "TaskScheduler.UnobservedTaskException");
+            ex.SetObserved();
         };
 
         Settings = SettingsService.Load();

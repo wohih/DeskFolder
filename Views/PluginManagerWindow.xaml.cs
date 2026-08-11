@@ -27,6 +27,7 @@ public partial class PluginManagerWindow : Window
             FolderPluginType.CpuGauge => "CPU 仪表盘",
             FolderPluginType.WeatherBadge => $"天气：{(string.IsNullOrWhiteSpace(Plugin.Text) ? "24°C" : Plugin.Text)}",
             FolderPluginType.CalendarTile => "日历方块",
+            FolderPluginType.MusicPlayer => "音乐播放器（酷狗音乐）",
             _ => "未配置"
         };
     }
@@ -105,6 +106,8 @@ public partial class PluginManagerWindow : Window
         TextBox.Text = p.Text ?? "";
         ColorBox.Text = p.Color ?? "";
         UpdateColorPreview(p.Color);
+        LyricFontSlider.Value = p.LyricFontSize;
+        LyricFontVal.Text = p.LyricFontSize == 0 ? "自动" : p.LyricFontSize.ToString();
         _suppress = false;
     }
 
@@ -224,6 +227,14 @@ public partial class PluginManagerWindow : Window
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
         pd.Plugin.Color = ColorBox.Text;
         UpdateColorPreview(pd.Plugin.Color);
+        S.Save();
+    }
+
+    private void LyricFontSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
+        pd.Plugin.LyricFontSize = (int)LyricFontSlider.Value;
+        LyricFontVal.Text = pd.Plugin.LyricFontSize == 0 ? "自动" : pd.Plugin.LyricFontSize.ToString();
         S.Save();
     }
 
