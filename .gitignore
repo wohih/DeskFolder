@@ -12,6 +12,9 @@ out_rel*/
 publish/
 publish_stage/
 _archive/
+*.zip
+*.7z
+*.tar.gz
 
 # 调试日志
 dbg.txt

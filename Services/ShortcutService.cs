@@ -36,6 +36,8 @@ public static class ShortcutService
     public static ShortcutItem? Resolve(string linkPath, bool loadIcon = true)
     {
         if (!File.Exists(linkPath)) return null;
+        object? shell = null;
+        object? shortcut = null;
         try
         {
             var item = new ShortcutItem
@@ -48,11 +50,12 @@ public static class ShortcutService
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
             if (shellType != null)
             {
-                dynamic shell = Activator.CreateInstance(shellType)!;
-                dynamic shortcut = shell.CreateShortcut(linkPath);
-                item.TargetPath = Convert.ToString(shortcut.TargetPath) ?? "";
-                item.Arguments = Convert.ToString(shortcut.Arguments) ?? "";
-                item.WorkingDirectory = Convert.ToString(shortcut.WorkingDirectory) ?? "";
+                shell = Activator.CreateInstance(shellType)!;
+                shortcut = ((dynamic)shell).CreateShortcut(linkPath);
+                var sc = (dynamic)shortcut;
+                item.TargetPath = Convert.ToString(sc.TargetPath) ?? "";
+                item.Arguments = Convert.ToString(sc.Arguments) ?? "";
+                item.WorkingDirectory = Convert.ToString(sc.WorkingDirectory) ?? "";
             }
 
             if (loadIcon)
@@ -63,6 +66,12 @@ public static class ShortcutService
         catch
         {
             return null;
+        }
+        finally
+        {
+            // 及时释放 COM RCW，避免等 GC 才回收造成内存堆积
+            try { if (shortcut != null) Marshal.ReleaseComObject(shortcut); } catch { }
+            try { if (shell != null) Marshal.ReleaseComObject(shell); } catch { }
         }
     }
 

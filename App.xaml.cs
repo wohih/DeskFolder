@@ -52,6 +52,12 @@ public partial class App : System.Windows.Application
         Services.StartupService.SetEnabled(Settings.Data.LaunchAtStartup);
         CreateTray();
         OpenAllFolders();
+
+        // 启动期有大量瞬态分配（JSON 反序列化、COM RCW、图标解码中间对象），
+        // 启动完成后主动回收一次，释放堆碎片，降低空闲驻留内存
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 
     private void OpenAllFolders()
@@ -121,6 +127,7 @@ public partial class App : System.Windows.Application
             return;
         }
         _settingsWindow = new SettingsWindow();
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
     }
 

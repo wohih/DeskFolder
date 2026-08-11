@@ -428,6 +428,7 @@ public partial class FolderWindow : Window
 
         CollapsedView.IsHitTestVisible = false;
         Panel.Visibility = Visibility.Visible;
+        _slotExpanded?.GifTimer?.Start(); // 展开面板可见时恢复其 GIF 动画
         Panel.Width = CollapsedW;
         Panel.Height = CollapsedH;
         Panel.Opacity = 0;
@@ -518,6 +519,7 @@ public partial class FolderWindow : Window
             else
             {
                 Panel.Visibility = Visibility.Collapsed;
+                _slotExpanded?.GifTimer?.Stop(); // 面板隐藏时暂停其 GIF 动画，避免后台空转
                 Panel.Opacity = 1;
                 Panel.Width = CollapsedW;
                 Panel.Height = CollapsedH;
@@ -1149,7 +1151,33 @@ public partial class FolderWindow : Window
         y = Math.Max(0, Math.Min(y, src.PixelHeight - 1));
         w = Math.Max(1, Math.Min(w, src.PixelWidth - x));
         h = Math.Max(1, Math.Min(h, src.PixelHeight - y));
-        return new CroppedBitmap(src, new Int32Rect(x, y, w, h));
+        var cb = new CroppedBitmap(src, new Int32Rect(x, y, w, h));
+        // 源已冻结时一并冻结裁剪结果：跨线程安全 + 释放解码器引用，降低 GC 压力
+        if (src.IsFrozen && !cb.IsFrozen) cb.Freeze();
+        return cb;
+    }
+
+    /// <summary>计算某槽位图片解码的目标像素宽度（物理像素）：按显示尺寸 × DPI 降采样，
+    /// 避免高分辨率原图（4K 等）全量解码后驻留内存。仅设宽度，高度按比例自动缩放。</summary>
+    private int SlotDecodePx(ImageSlot slot)
+    {
+        double dpi = Math.Max(1.0, Math.Max(_dpiScaleX, _dpiScaleY));
+        double logicalW, logicalH;
+        if (slot.UseExpandedCrop)
+        {
+            // 展开态：优先用已计算的面板目标尺寸；未计算时按行列估算（与 RecomputeTargets 一致）
+            logicalW = _panelTargetW > 0 ? _panelTargetW : EffectiveCols * IconCell + PanelPaddingH;
+            logicalH = _panelTargetH > 0 ? _panelTargetH
+                : Math.Max(EffectiveRows, 1) * IconCell + HeaderHeight + PanelPaddingV;
+        }
+        else
+        {
+            logicalW = CollapsedW;
+            logicalH = CollapsedH;
+        }
+        // 取最长边对应的物理像素，作为 DecodePixelWidth 的上限（足够清晰且不过度占用内存）
+        double maxLogical = Math.Max(logicalW, logicalH);
+        return Math.Max(64, (int)Math.Ceiling(maxLogical * dpi));
     }
 
     /// <summary>重新加载某槽到指定索引的图片（含 GIF 逐帧动画接管）。裁剪随该状态（折叠/展开）各自生效。</summary>
@@ -1172,38 +1200,56 @@ public partial class FolderWindow : Window
         }
         try
         {
-            var decoder = BitmapDecoder.Create(new Uri(path, UriKind.Absolute),
-                BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-            var frames = decoder.Frames;
-            slot.Img.Source = CropFrame(frames[0], slot.UseExpandedCrop, slot.Theme);
-            if (frames.Count > 1)
+            bool isGif = path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase);
+            if (isGif)
             {
-                // 动画 GIF：按每帧自带延迟逐帧切换（单位 1/100 秒）
-                var delays = new List<TimeSpan>(frames.Count);
-                for (int i = 0; i < frames.Count; i++)
+                // GIF 动图：需逐帧访问，用 BitmapDecoder（GIF 通常分辨率低，全量解码可接受）
+                var decoder = BitmapDecoder.Create(new Uri(path, UriKind.Absolute),
+                    BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+                var frames = decoder.Frames;
+                slot.Img.Source = CropFrame(frames[0], slot.UseExpandedCrop, slot.Theme);
+                if (frames.Count > 1)
                 {
-                    int d = 10; // 默认 100ms
-                    try
+                    // 动画 GIF：按每帧自带延迟逐帧切换（单位 1/100 秒）
+                    var delays = new List<TimeSpan>(frames.Count);
+                    for (int i = 0; i < frames.Count; i++)
                     {
-                        if (frames[i].Metadata is BitmapMetadata md && md.ContainsQuery("/grctlext/Delay"))
-                            d = (int)(ulong)md.GetQuery("/grctlext/Delay");
+                        int d = 10; // 默认 100ms
+                        try
+                        {
+                            if (frames[i].Metadata is BitmapMetadata md && md.ContainsQuery("/grctlext/Delay"))
+                                d = (int)(ulong)md.GetQuery("/grctlext/Delay");
+                        }
+                        catch { }
+                        if (d <= 0) d = 10;
+                        delays.Add(TimeSpan.FromMilliseconds(d * 10));
                     }
-                    catch { }
-                    if (d <= 0) d = 10;
-                    delays.Add(TimeSpan.FromMilliseconds(d * 10));
+                    int idx = 0;
+                    var gtimer = new DispatcherTimer();
+                    gtimer.Tick += (_, _) =>
+                    {
+                        idx = (idx + 1) % frames.Count;
+                        slot.Img.Source = CropFrame(frames[idx], slot.UseExpandedCrop, slot.Theme);
+                        gtimer.Interval = delays[idx];
+                    };
+                    gtimer.Interval = delays[0];
+                    gtimer.Start();
+                    slot.GifTimer = gtimer;
+                    _gifTimers.Add(gtimer);
                 }
-                int idx = 0;
-                var gtimer = new DispatcherTimer();
-                gtimer.Tick += (_, _) =>
-                {
-                    idx = (idx + 1) % frames.Count;
-                    slot.Img.Source = CropFrame(frames[idx], slot.UseExpandedCrop, slot.Theme);
-                    gtimer.Interval = delays[idx];
-                };
-                gtimer.Interval = delays[0];
-                gtimer.Start();
-                slot.GifTimer = gtimer;
-                _gifTimers.Add(gtimer);
+            }
+            else
+            {
+                // 静态图（png/jpg/bmp/tif 等）：按显示尺寸降采样解码，避免高分辨率原图全量驻留内存
+                int decodePx = SlotDecodePx(slot);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(path, UriKind.Absolute);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = decodePx;
+                bmp.EndInit();
+                bmp.Freeze(); // 跨线程安全 + 释放解码器引用
+                slot.Img.Source = CropFrame(bmp, slot.UseExpandedCrop, slot.Theme);
             }
             slot.Target.Background = System.Windows.Media.Brushes.Transparent;
         }

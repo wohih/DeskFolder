@@ -11,6 +11,10 @@
     <RootNamespace>DeskFolder</RootNamespace>
     <Version>1.0.0</Version>
     <Description>安卓风格的 Windows 桌面快捷方式文件夹</Description>
+    <!-- GC 调优：小桌面应用用工作站 GC + 并发 + 分层编译，降低空闲内存占用 -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
   </PropertyGroup>
 
 </Project>

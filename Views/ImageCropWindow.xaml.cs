@@ -66,6 +66,7 @@ public partial class ImageCropWindow : Window
             _src.UriSource = new Uri(imagePath, UriKind.Absolute);
             _src.CacheOption = BitmapCacheOption.OnLoad;
             _src.EndInit();
+            _src.Freeze();
         }
         catch
         {
@@ -216,7 +217,9 @@ public partial class ImageCropWindow : Window
         y = Math.Max(0, Math.Min(y, _src.PixelHeight - 1));
         w = Math.Max(1, Math.Min(w, _src.PixelWidth - x));
         h = Math.Max(1, Math.Min(h, _src.PixelHeight - y));
-        return new CroppedBitmap(_src, new Int32Rect(x, y, w, h));
+        var cb = new CroppedBitmap(_src, new Int32Rect(x, y, w, h));
+        if (_src.IsFrozen && !cb.IsFrozen) cb.Freeze();
+        return cb;
     }
 
     /// <summary>重新摆放所有可视元素并刷新两个预览。</summary>

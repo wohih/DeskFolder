@@ -81,20 +81,19 @@ internal sealed class TrayIcon : IDisposable
         _onToggleAutoStart = onToggleAutoStart ?? (() => { });
         _onNewFolder = onNewFolder ?? (() => { });
 
-        // 用一个隐藏的零尺寸窗口承载托盘回调消息
-        var host = new Window
+        // 用一个零尺寸原生消息窗口承载托盘回调（不创建 WPF Window / 不开透明合成层，节省内存）
+        var p = new HwndSourceParameters("DeskFolderTray")
         {
+            WindowStyle = 0,
+            ExtendedWindowStyle = 0x00000080, // WS_EX_TOOLWINDOW：不出现在 Alt+Tab / 任务栏
             Width = 0,
             Height = 0,
-            WindowStyle = WindowStyle.None,
-            ShowInTaskbar = false,
-            AllowsTransparency = true,
-            Background = null,
-            Visibility = Visibility.Hidden
+            PositionX = 0,
+            PositionY = 0,
+            UsesPerPixelOpacity = false // 关键：不开透明合成缓冲区
         };
-        host.Show();
-        _hwnd = new WindowInteropHelper(host).EnsureHandle();
-        _source = HwndSource.FromHwnd(_hwnd);
+        _source = new HwndSource(p);
+        _hwnd = _source.Handle;
         _source.AddHook(WndProc);
 
         _data = new NOTIFYICONDATA

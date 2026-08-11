@@ -595,7 +595,9 @@ public partial class ThemeEditorWindow : Window
                 bmp.BeginInit();
                 bmp.UriSource = new Uri(path, UriKind.Absolute);
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = 72; // 缩略图 36×36，2 倍解码足够清晰且省内存
                 bmp.EndInit();
+                bmp.Freeze();
                 thumb.Source = bmp;
             }
             catch { }
@@ -695,6 +697,7 @@ public partial class ThemeEditorWindow : Window
             bmp.UriSource = new Uri(path, UriKind.Absolute);
             bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.EndInit();
+            bmp.Freeze();
             if (_theme.HasImageCrop)
             {
                 int x = (int)Math.Round(_theme.ImageCropX!.Value * bmp.PixelWidth);
@@ -705,7 +708,9 @@ public partial class ThemeEditorWindow : Window
                 y = Math.Max(0, Math.Min(y, bmp.PixelHeight - 1));
                 w = Math.Max(1, Math.Min(w, bmp.PixelWidth - x));
                 h = Math.Max(1, Math.Min(h, bmp.PixelHeight - y));
-                return new CroppedBitmap(bmp, new Int32Rect(x, y, w, h));
+                var cb = new CroppedBitmap(bmp, new Int32Rect(x, y, w, h));
+                cb.Freeze();
+                return cb;
             }
             return bmp;
         }
