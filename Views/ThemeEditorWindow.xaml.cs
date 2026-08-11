@@ -2,6 +2,7 @@ using System.IO;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using DeskFolder.Services;
@@ -118,10 +119,77 @@ public partial class ThemeEditorWindow : Window
 
         DeleteButton.Visibility = _theme.BuiltInId == null ? Visibility.Visible : Visibility.Collapsed;
 
+        InitAdvancedParamsUI();
         ShowGroupsForMode(_theme.Mode);
         InitImageModeUI();
         RefreshVisuals();
         UpdateCropStatus();
+    }
+
+    private void SetPreviewBrush(UIElement e, string hex)
+    {
+        if (e is Border b && ThemeHelper.TryParseColor(hex, out var c))
+            b.Background = new SolidColorBrush(c);
+    }
+
+    /// <summary>点击颜色预览时聚焦对应的 hex 输入框并全选文字，方便直接键入新颜色值。</summary>
+    private static void FocusAndSelectHex(TextBox box)
+    {
+        box.Focus();
+        box.SelectAll();
+    }
+
+    /// <summary>初始化渐变 / 霓虹 / 玻璃 / 亚克力 / 折纸 / 浮雕 6 种高级主题的参数控件。</summary>
+    private void InitAdvancedParamsUI()
+    {
+        // ---- 渐变 ----
+        _suppress = true;
+        SetPreviewBrush(GradientColorAPreview, _theme.GradientColorA);
+        GradientColorABox.Text = _theme.GradientColorA;
+        SetPreviewBrush(GradientColorBPreview, _theme.GradientColorB);
+        GradientColorBBox.Text = _theme.GradientColorB;
+        GradientTypeCombo.SelectedIndex = Math.Clamp(_theme.GradientType, 0, 4);
+        GradientAngleSlider.Value = _theme.GradientAngle;
+        GradientAngleVal.Text = ((int)GradientAngleSlider.Value).ToString() + "°";
+        GradientAngleRow.Visibility = _theme.GradientType == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // ---- 霓虹 ----
+        SetPreviewBrush(NeonGlowPreview, _theme.NeonGlowColor);
+        NeonGlowBox.Text = _theme.NeonGlowColor;
+        SetPreviewBrush(NeonBgPreview, _theme.NeonBgColor);
+        NeonBgBox.Text = _theme.NeonBgColor;
+        NeonGlowIntensitySlider.Value = _theme.NeonGlowIntensity;
+        NeonGlowIntensityVal.Text = NeonGlowIntensitySlider.Value.ToString("0.00") + "x";
+
+        // ---- 玻璃 ----
+        SetPreviewBrush(GlassTintPreview, _theme.GlassTintColor);
+        GlassTintBox.Text = _theme.GlassTintColor;
+        SetPreviewBrush(GlassHlPreview, _theme.GlassHighlight);
+        GlassHlBox.Text = _theme.GlassHighlight;
+        GlassSatSlider.Value = _theme.GlassSaturation;
+        GlassSatVal.Text = GlassSatSlider.Value.ToString("0.00");
+
+        // ---- 亚克力 ----
+        SetPreviewBrush(AcrylicTintPreview, _theme.AcrylicTint);
+        AcrylicTintBox.Text = _theme.AcrylicTint;
+        AcrylicOpacitySlider.Value = _theme.AcrylicOpacity;
+        AcrylicOpacityVal.Text = AcrylicOpacitySlider.Value.ToString("0.00");
+        AcrylicNoiseSlider.Value = _theme.AcrylicNoise;
+        AcrylicNoiseVal.Text = AcrylicNoiseSlider.Value.ToString("0.00");
+
+        // ---- 折纸 ----
+        SetPreviewBrush(PaperColorPreview, _theme.PaperColor);
+        PaperColorBox.Text = _theme.PaperColor;
+        PaperFoldCombo.SelectedIndex = Math.Clamp(_theme.PaperFoldDirection, 0, 3);
+        PaperShadowSlider.Value = _theme.PaperShadowDepth;
+        PaperShadowVal.Text = PaperShadowSlider.Value.ToString("0.00") + "x";
+
+        // ---- 浮雕 ----
+        SetPreviewBrush(EmbossColorPreview, _theme.EmbossColor);
+        EmbossColorBox.Text = _theme.EmbossColor;
+        EmbossHeightSlider.Value = _theme.EmbossHeight;
+        EmbossHeightVal.Text = EmbossHeightSlider.Value.ToString("0.0") + "px";
+        _suppress = false;
     }
 
     /// <summary>颜色选择器当前编辑的目标颜色（填充→BackgroundColor，方框→BorderColor）。</summary>
@@ -148,15 +216,28 @@ public partial class ThemeEditorWindow : Window
     private void ShowGroupsForMode(ThemeMode mode)
     {
         bool color = mode is ThemeMode.Fill or ThemeMode.BorderOnly;
-        bool opacity = mode is ThemeMode.Fill or ThemeMode.Image;
+        bool opacity = mode is ThemeMode.Fill or ThemeMode.Image or ThemeMode.Gradient or ThemeMode.Neon;
         ColorGroup.Visibility = color ? Visibility.Visible : Visibility.Collapsed;
         OpacityCard.Visibility = opacity ? Visibility.Visible : Visibility.Collapsed;
         BorderCard.Visibility = mode == ThemeMode.BorderOnly ? Visibility.Visible : Visibility.Collapsed;
         ImageCard.Visibility = mode == ThemeMode.Image ? Visibility.Visible : Visibility.Collapsed;
-        RadiusGroup.Visibility = Visibility.Visible; // 圆角始终显示（在卡片内）
+        RadiusGroup.Visibility = Visibility.Visible;
+
+        GradientCard.Visibility = mode == ThemeMode.Gradient ? Visibility.Visible : Visibility.Collapsed;
+        NeonCard.Visibility = mode == ThemeMode.Neon ? Visibility.Visible : Visibility.Collapsed;
+        GlassCard.Visibility = mode == ThemeMode.Glass ? Visibility.Visible : Visibility.Collapsed;
+        AcrylicCard.Visibility = mode == ThemeMode.Acrylic ? Visibility.Visible : Visibility.Collapsed;
+        PaperCard.Visibility = mode == ThemeMode.Paper ? Visibility.Visible : Visibility.Collapsed;
+        EmbossCard.Visibility = mode == ThemeMode.Emboss ? Visibility.Visible : Visibility.Collapsed;
 
         ColorLabel.Text = mode == ThemeMode.BorderOnly ? "方框颜色" : "背景颜色";
-        OpacityLabel.Text = mode == ThemeMode.Image ? "图片透明度" : "背景透明度";
+        OpacityLabel.Text = mode switch
+        {
+            ThemeMode.Image => "图片透明度",
+            ThemeMode.Neon => "背景透明度",
+            ThemeMode.Gradient => "渐变透明度",
+            _ => "背景透明度"
+        };
     }
 
     private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -963,7 +1044,7 @@ public partial class ThemeEditorWindow : Window
     /// <summary>同步三个分段按钮的视觉状态（选中=蓝底白字，未选=灰底深字）。</summary>
     private void SyncModeButtons(int selectedIndex)
     {
-        var buttons = new[] { ModeFillBtn, ModeBorderBtn, ModeImageBtn };
+        var buttons = new[] { ModeFillBtn, ModeBorderBtn, ModeImageBtn, ModeGradientBtn, ModeNeonBtn, ModeGlassBtn, ModeAcrylicBtn, ModePaperBtn, ModeEmbossBtn };
         for (int i = 0; i < buttons.Length; i++)
         {
             if (i == selectedIndex)
@@ -977,5 +1058,206 @@ public partial class ThemeEditorWindow : Window
                 buttons[i].Foreground = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
             }
         }
+    }
+
+    private void ModeGradient_Click(object sender, RoutedEventArgs e) { SetMode(3); }
+    private void ModeNeon_Click(object sender, RoutedEventArgs e) { SetMode(4); }
+    private void ModeGlass_Click(object sender, RoutedEventArgs e) { SetMode(5); }
+    private void ModeAcrylic_Click(object sender, RoutedEventArgs e) { SetMode(6); }
+    private void ModePaper_Click(object sender, RoutedEventArgs e) { SetMode(7); }
+    private void ModeEmboss_Click(object sender, RoutedEventArgs e) { SetMode(8); }
+
+    private void SetMode(int idx)
+    {
+        _suppress = true;
+        ModeCombo.SelectedIndex = idx;
+        _suppress = false;
+        SyncModeButtons(idx);
+        ShowGroupsForMode((ThemeMode)idx);
+        LoadColorFromTarget();
+        RefreshVisuals();
+        Commit();
+    }
+
+    // ---------------- 高级主题参数：渐变 / 霓虹 / 玻璃 / 亚克力 / 折纸 / 浮雕 事件 ----------------
+
+    // -- 颜色 Hex 同步工具 --
+    private static bool TrySyncColor(TextBox box, Border preview, Action<string> apply, out string res)
+    {
+        var text = (box.Text ?? "").Trim();
+        if (!ThemeHelper.TryParseColor(text, out var c))
+        {
+            res = text;
+            return false;
+        }
+        text = c.ToString();
+        preview.Background = new SolidColorBrush(c);
+        apply(text);
+        res = text;
+        return true;
+    }
+
+    // -- 渐变 --
+    private void GradientColorA_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(GradientColorABox, GradientColorAPreview, v => _theme.GradientColorA = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void GradientColorB_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(GradientColorBBox, GradientColorBPreview, v => _theme.GradientColorB = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void GradientColorA_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(GradientColorABox);
+    }
+    private void GradientColorB_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(GradientColorBBox);
+    }
+    private void GradientTypeCombo_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress) return;
+        _theme.GradientType = GradientTypeCombo.SelectedIndex;
+        GradientAngleRow.Visibility = _theme.GradientType == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RefreshVisuals(); Commit();
+    }
+    private void GradientAngleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.GradientAngle = GradientAngleSlider.Value;
+        GradientAngleVal.Text = ((int)GradientAngleSlider.Value).ToString() + "°";
+        RefreshVisuals(); Commit();
+    }
+
+    // -- 霓虹 --
+    private void NeonGlow_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(NeonGlowBox, NeonGlowPreview, v => _theme.NeonGlowColor = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void NeonBg_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(NeonBgBox, NeonBgPreview, v => _theme.NeonBgColor = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void NeonGlow_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(NeonGlowBox);
+    }
+    private void NeonBg_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(NeonBgBox);
+    }
+    private void NeonGlowIntensity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.NeonGlowIntensity = NeonGlowIntensitySlider.Value;
+        NeonGlowIntensityVal.Text = NeonGlowIntensitySlider.Value.ToString("0.00") + "x";
+        RefreshVisuals(); Commit();
+    }
+
+    // -- 玻璃 --
+    private void GlassTint_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(GlassTintBox, GlassTintPreview, v => _theme.GlassTintColor = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void GlassHl_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(GlassHlBox, GlassHlPreview, v => _theme.GlassHighlight = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void GlassTint_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(GlassTintBox);
+    }
+    private void GlassHl_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(GlassHlBox);
+    }
+    private void GlassSat_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.GlassSaturation = GlassSatSlider.Value;
+        GlassSatVal.Text = GlassSatSlider.Value.ToString("0.00");
+        RefreshVisuals(); Commit();
+    }
+
+    // -- 亚克力 --
+    private void AcrylicTint_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(AcrylicTintBox, AcrylicTintPreview, v => _theme.AcrylicTint = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void AcrylicTint_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(AcrylicTintBox);
+    }
+    private void AcrylicOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.AcrylicOpacity = AcrylicOpacitySlider.Value;
+        AcrylicOpacityVal.Text = AcrylicOpacitySlider.Value.ToString("0.00");
+        RefreshVisuals(); Commit();
+    }
+    private void AcrylicNoise_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.AcrylicNoise = AcrylicNoiseSlider.Value;
+        AcrylicNoiseVal.Text = AcrylicNoiseSlider.Value.ToString("0.00");
+        RefreshVisuals(); Commit();
+    }
+
+    // -- 折纸 --
+    private void PaperColor_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(PaperColorBox, PaperColorPreview, v => _theme.PaperColor = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void PaperColor_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(PaperColorBox);
+    }
+    private void PaperFoldCombo_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress) return;
+        _theme.PaperFoldDirection = PaperFoldCombo.SelectedIndex;
+        RefreshVisuals(); Commit();
+    }
+    private void PaperShadow_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.PaperShadowDepth = PaperShadowSlider.Value;
+        PaperShadowVal.Text = PaperShadowSlider.Value.ToString("0.00") + "x";
+        RefreshVisuals(); Commit();
+    }
+
+    // -- 浮雕 --
+    private void EmbossColor_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppress) return;
+        TrySyncColor(EmbossColorBox, EmbossColorPreview, v => _theme.EmbossColor = v, out _);
+        RefreshVisuals(); Commit();
+    }
+    private void EmbossColor_Click(object sender, MouseButtonEventArgs e)
+    {
+        FocusAndSelectHex(EmbossColorBox);
+    }
+    private void EmbossHeight_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress) return;
+        _theme.EmbossHeight = EmbossHeightSlider.Value;
+        EmbossHeightVal.Text = EmbossHeightSlider.Value.ToString("0.0") + "px";
+        RefreshVisuals(); Commit();
     }
 }

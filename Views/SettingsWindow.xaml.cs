@@ -26,7 +26,7 @@ public partial class SettingsWindow : Window
             AnimSection.Visibility = Visibility.Collapsed;
             FolderMgmtSection.Visibility = Visibility.Collapsed;
             BottomButtons.Visibility = Visibility.Collapsed;
-            ThemeHint.Text = "左键点击主题名即可单独应用「此文件夹」的外观；右键点击主题名可详细编辑主题（主题在所有文件夹间共享）。";
+            ThemeHint.Text = "左键点击主题名即可单独应用「此文件夹」的外观；右键点击主题名可详细编辑主题。";
         }
 
         LoadValues();

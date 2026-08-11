@@ -36,20 +36,46 @@
                     <!-- 主题类型（分段控件）+ 颜色组 合并卡片 -->
                     <Border CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12">
                         <StackPanel>
-                            <!-- 分段控件：填充颜色 / 简约方框 / 图片背景 -->
+                            <!-- 分段控件：前三种常见类型一行；后六类换行以紧凑形式显示 -->
                             <TextBlock Text="主题类型" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
                             <StackPanel Orientation="Horizontal" x:Name="ModeSegment">
-                                <Button x:Name="ModeFillBtn" Content="填充颜色" Click="ModeFill_Click"
-                                        Padding="18,7" Background="#0078D7" Foreground="White"
-                                        BorderThickness="0" FontSize="13" FontWeight="SemiBold"
+                                <Button x:Name="ModeFillBtn" Content="纯色填充" Click="ModeFill_Click"
+                                        Padding="14,7" Background="#0078D7" Foreground="White"
+                                        BorderThickness="0" FontSize="12" FontWeight="SemiBold"
                                         HorizontalContentAlignment="Center"/>
                                 <Button x:Name="ModeBorderBtn" Content="简约方框" Click="ModeBorder_Click"
-                                        Padding="18,7" Background="#F0F0F0" Foreground="#444"
-                                        BorderThickness="0" FontSize="13"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
                                         HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
                                 <Button x:Name="ModeImageBtn" Content="图片背景" Click="ModeImage_Click"
-                                        Padding="18,7" Background="#F0F0F0" Foreground="#444"
-                                        BorderThickness="0" FontSize="13"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                                <Button x:Name="ModeGradientBtn" Content="渐变" Click="ModeGradient_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" x:Name="ModeSegment2" Margin="0,4,0,0">
+                                <Button x:Name="ModeNeonBtn" Content="霓虹" Click="ModeNeon_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center"/>
+                                <Button x:Name="ModeGlassBtn" Content="玻璃" Click="ModeGlass_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                                <Button x:Name="ModeAcrylicBtn" Content="亚克力" Click="ModeAcrylic_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                                <Button x:Name="ModePaperBtn" Content="折纸" Click="ModePaper_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                                <Button x:Name="ModeEmbossBtn" Content="浮雕" Click="ModeEmboss_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
                                         HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
                             </StackPanel>
 
@@ -58,6 +84,12 @@
                                 <ComboBoxItem Content="填充颜色"/>
                                 <ComboBoxItem Content="简约方框"/>
                                 <ComboBoxItem Content="图片背景"/>
+                                <ComboBoxItem Content="渐变"/>
+                                <ComboBoxItem Content="霓虹"/>
+                                <ComboBoxItem Content="玻璃"/>
+                                <ComboBoxItem Content="亚克力"/>
+                                <ComboBoxItem Content="折纸"/>
+                                <ComboBoxItem Content="浮雕"/>
                             </ComboBox>
 
                             <!-- 颜色组（填充背景 / 方框颜色） -->
@@ -261,6 +293,178 @@
                                 <TextBlock x:Name="RadiusVal" Grid.Column="1" HorizontalAlignment="Right"
                                            VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
                             </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 渐变参数 卡片 -->
+                    <Border x:Name="GradientCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="渐变参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <!-- 渐变双色 -->
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="起始色 A" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="GradientColorAPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="GradientColorA_Click" Cursor="Hand" ToolTip="点击选择颜色"/>
+                                    <TextBox x:Name="GradientColorABox" TextChanged="GradientColorA_TextChanged"
+                                             Margin="0,4,8,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="结束色 B" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="GradientColorBPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="GradientColorB_Click" Cursor="Hand" ToolTip="点击选择颜色"/>
+                                    <TextBox x:Name="GradientColorBBox" TextChanged="GradientColorB_TextChanged"
+                                             Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="渐变方向" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="GradientTypeCombo" SelectionChanged="GradientTypeCombo_Changed" Margin="0,0,0,6">
+                                <ComboBoxItem Content="线性（可调角度）"/>
+                                <ComboBoxItem Content="径向（中心扩散）"/>
+                                <ComboBoxItem Content="对角（左上→右下）"/>
+                                <ComboBoxItem Content="垂直（上→下）"/>
+                                <ComboBoxItem Content="水平（左→右）"/>
+                            </ComboBox>
+                            <Grid x:Name="GradientAngleRow" Margin="0,0,0,2">
+                                <TextBlock Text="线性角度" FontSize="12"/>
+                                <TextBlock x:Name="GradientAngleVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="GradientAngleSlider" Minimum="0" Maximum="360" TickFrequency="1" Margin="0,0,0,10"
+                                    ValueChanged="GradientAngleSlider_ValueChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 霓虹风格 卡片 -->
+                    <Border x:Name="NeonCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="霓虹风格参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                    <TextBlock Text="发光颜色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="NeonGlowPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="NeonGlow_Click" Cursor="Hand"/>
+                                    <TextBox x:Name="NeonGlowBox" TextChanged="NeonGlow_TextChanged"
+                                             Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="背景色（深色）" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="NeonBgPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="NeonBg_Click" Cursor="Hand"/>
+                                    <TextBox x:Name="NeonBgBox" TextChanged="NeonBg_TextChanged"
+                                             Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="发光强度" FontSize="12"/>
+                                <TextBlock x:Name="NeonGlowIntensityVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="NeonGlowIntensitySlider" Minimum="0" Maximum="3" TickFrequency="0.1"
+                                    ValueChanged="NeonGlowIntensity_ValueChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 玻璃拟态 卡片 -->
+                    <Border x:Name="GlassCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="玻璃拟态参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                    <TextBlock Text="玻璃主色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="GlassTintPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="GlassTint_Click" Cursor="Hand"/>
+                                    <TextBox x:Name="GlassTintBox" TextChanged="GlassTint_TextChanged"
+                                             Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="高光边颜色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                    <Border x:Name="GlassHlPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                            MouseLeftButtonDown="GlassHl_Click" Cursor="Hand"/>
+                                    <TextBox x:Name="GlassHlBox" TextChanged="GlassHl_TextChanged"
+                                             Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="玻璃饱和度（0=磨砂 / 1=纯玻璃）" FontSize="12"/>
+                                <TextBlock x:Name="GlassSatVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="GlassSatSlider" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                    ValueChanged="GlassSat_ValueChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 亚克力 / Mica 卡片 -->
+                    <Border x:Name="AcrylicCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="亚克力（Mica Alt）参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <StackPanel Margin="0,0,0,10">
+                                <TextBlock Text="亚克力叠色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                <Border x:Name="AcrylicTintPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                        MouseLeftButtonDown="AcrylicTint_Click" Cursor="Hand"/>
+                                <TextBox x:Name="AcrylicTintBox" TextChanged="AcrylicTint_TextChanged"
+                                         Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="叠层透明度" FontSize="12"/>
+                                <TextBlock x:Name="AcrylicOpacityVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="AcrylicOpacitySlider" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                    ValueChanged="AcrylicOpacity_ValueChanged" Margin="0,0,0,10"/>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="噪点层不透明度（颗粒感）" FontSize="12"/>
+                                <TextBlock x:Name="AcrylicNoiseVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="AcrylicNoiseSlider" Minimum="0" Maximum="0.3" TickFrequency="0.01"
+                                    ValueChanged="AcrylicNoise_ValueChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 折纸风格 卡片 -->
+                    <Border x:Name="PaperCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="折纸风格参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <StackPanel Margin="0,0,0,10">
+                                <TextBlock Text="纸张颜色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                <Border x:Name="PaperColorPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                        MouseLeftButtonDown="PaperColor_Click" Cursor="Hand"/>
+                                <TextBox x:Name="PaperColorBox" TextChanged="PaperColor_TextChanged"
+                                         Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <TextBlock Text="折痕方向" FontSize="12" Foreground="#555" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="PaperFoldCombo" SelectionChanged="PaperFoldCombo_Changed" Margin="0,0,0,10">
+                                <ComboBoxItem Content="左上折"/>
+                                <ComboBoxItem Content="右上折"/>
+                                <ComboBoxItem Content="左下折"/>
+                                <ComboBoxItem Content="右下折"/>
+                            </ComboBox>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="折痕阴影深度" FontSize="12"/>
+                                <TextBlock x:Name="PaperShadowVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="PaperShadowSlider" Minimum="0" Maximum="2" TickFrequency="0.1"
+                                    ValueChanged="PaperShadow_ValueChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 浮雕风格 卡片 -->
+                    <Border x:Name="EmbossCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="16,14" Margin="0,0,0,12" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="浮雕风格参数" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <StackPanel Margin="0,0,0,10">
+                                <TextBlock Text="浮雕底色" FontSize="12" Foreground="#555" Margin="0,0,0,4"/>
+                                <Border x:Name="EmbossColorPreview" CornerRadius="6" Height="36" BorderBrush="#DDD" BorderThickness="1"
+                                        MouseLeftButtonDown="EmbossColor_Click" Cursor="Hand"/>
+                                <TextBox x:Name="EmbossColorBox" TextChanged="EmbossColor_TextChanged"
+                                         Margin="0,4,0,0" FontSize="11" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="凸起高度（立体感）" FontSize="12"/>
+                                <TextBlock x:Name="EmbossHeightVal" HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="#0078D7" FontSize="13"/>
+                            </Grid>
+                            <Slider x:Name="EmbossHeightSlider" Minimum="0" Maximum="8" TickFrequency="0.5"
+                                    ValueChanged="EmbossHeight_ValueChanged"/>
                         </StackPanel>
                     </Border>
 

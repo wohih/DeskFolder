@@ -1,0 +1,222 @@
+<Window x:Class="DeskFolder.Views.PluginManagerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="插件管理" Height="600" Width="460"
+        WindowStartupLocation="CenterOwner"
+        Background="#F5F5F5" ResizeMode="CanResize" MinWidth="420" MinHeight="500">
+    <Window.Resources>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#E8E8E8"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#555"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="InputBox" TargetType="TextBox">
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="BorderBrush" Value="#CCC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="White"/>
+        </Style>
+        <Style x:Key="PrimaryBtn" TargetType="Button">
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Background" Value="#0078D7"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="SecondaryBtn" TargetType="Button">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Background" Value="#F0F0F0"/>
+            <Setter Property="Foreground" Value="#444"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部标题 -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="插件管理" FontSize="18" FontWeight="Bold"/>
+            <TextBlock x:Name="FolderNameLabel" Text="文件夹：" FontSize="12" Foreground="#666" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- 中间：插件列表 + 编辑面板 -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- 已添加插件列表 -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <TextBlock Text="已挂载插件" Style="{StaticResource SectionLabel}"/>
+                            <Button x:Name="AddPluginBtn" Content="+ 添加" HorizontalAlignment="Right"
+                                    Style="{StaticResource PrimaryBtn}" Click="AddPluginBtn_Click"/>
+                        </Grid>
+                        <ListBox x:Name="PluginList" Height="120" SelectionChanged="PluginList_SelectionChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding DisplayName}"/>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </StackPanel>
+                </Border>
+
+                <!-- 当前选中插件的编辑面板 -->
+                <Border x:Name="EditPanel" Style="{StaticResource Card}" Visibility="Collapsed">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <TextBlock Text="插件参数" Style="{StaticResource SectionLabel}"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="RemoveBtn" Content="移除" Style="{StaticResource SecondaryBtn}"
+                                        Click="RemoveBtn_Click" Margin="0,0,6,0"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 插件类型 -->
+                        <TextBlock Text="插件类型" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox x:Name="TypeCombo" SelectionChanged="TypeCombo_Changed" Margin="0,0,0,10">
+                            <ComboBoxItem Content="模拟时钟（表盘+指针）"/>
+                            <ComboBoxItem Content="数字时钟（时:分:秒）"/>
+                            <ComboBoxItem Content="便签条（自定义文字）"/>
+                            <ComboBoxItem Content="CPU 仪表盘（动态）"/>
+                            <ComboBoxItem Content="天气徽章（手动填写）"/>
+                            <ComboBoxItem Content="日历小方块"/>
+                        </ComboBox>
+
+                        <!-- 折叠态位置 -->
+                        <TextBlock Text="折叠态位置" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox x:Name="CollapsedCornerCombo" SelectionChanged="CollapsedCorner_Changed" Margin="0,0,0,10">
+                            <ComboBoxItem Content="左上角"/>
+                            <ComboBoxItem Content="右上角"/>
+                            <ComboBoxItem Content="左下角"/>
+                            <ComboBoxItem Content="右下角"/>
+                        </ComboBox>
+
+                        <!-- 展开态位置 -->
+                        <TextBlock Text="展开态位置（角落定位）" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox x:Name="ExpandedCornerCombo" SelectionChanged="ExpandedCorner_Changed" Margin="0,0,0,10">
+                            <ComboBoxItem Content="左上角"/>
+                            <ComboBoxItem Content="右上角"/>
+                            <ComboBoxItem Content="左下角"/>
+                            <ComboBoxItem Content="右下角"/>
+                        </ComboBox>
+
+                        <!-- 网格占位尺寸（展开态网格布局） -->
+                        <TextBlock Text="网格占位尺寸（展开态）" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox x:Name="GridSizeCombo" SelectionChanged="GridSize_Changed" Margin="0,0,0,10">
+                            <ComboBoxItem Content="1 × 1（单格）"/>
+                            <ComboBoxItem Content="1 × 2（竖向）"/>
+                            <ComboBoxItem Content="2 × 1（横向）"/>
+                            <ComboBoxItem Content="2 × 2（大格）"/>
+                        </ComboBox>
+                        <TextBlock Text="提示：在展开面板中可以直接拖动插件改变位置" 
+                                   Foreground="#999" FontSize="11" Margin="0,-6,0,10"/>
+
+                        <!-- 显示开关 -->
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <CheckBox x:Name="ShowCollapsedCheck" Content="折叠态显示" Grid.Column="0"
+                                      Checked="ShowCollapsed_Changed" Unchecked="ShowCollapsed_Changed"/>
+                            <CheckBox x:Name="ShowExpandedCheck" Content="展开态显示" Grid.Column="1"
+                                      Checked="ShowExpanded_Changed" Unchecked="ShowExpanded_Changed"/>
+                        </Grid>
+
+                        <!-- 尺寸 -->
+                        <Grid Margin="0,0,0,6">
+                            <TextBlock Text="尺寸 (px，0=默认)" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="SizeVal" HorizontalAlignment="Right" FontWeight="SemiBold"
+                                       Foreground="#0078D7" FontSize="12"/>
+                        </Grid>
+                        <Slider x:Name="SizeSlider" Minimum="0" Maximum="200" TickFrequency="2"
+                                ValueChanged="SizeSlider_Changed" Margin="0,0,0,10"/>
+
+                        <!-- 偏移微调 -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                <TextBlock Text="折叠态偏移 X" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="CollapsedOffsetXBox" Style="{StaticResource InputBox}"
+                                         TextChanged="CollapsedOffsetX_Changed"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="折叠态偏移 Y" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="CollapsedOffsetYBox" Style="{StaticResource InputBox}"
+                                         TextChanged="CollapsedOffsetY_Changed"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                <TextBlock Text="展开态偏移 X" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="ExpandedOffsetXBox" Style="{StaticResource InputBox}"
+                                         TextChanged="ExpandedOffsetX_Changed"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="展开态偏移 Y" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="ExpandedOffsetYBox" Style="{StaticResource InputBox}"
+                                         TextChanged="ExpandedOffsetY_Changed"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 文字参数 -->
+                        <TextBlock Text="文字参数（便签内容 / 天气温度 等）" Style="{StaticResource FieldLabel}"/>
+                        <TextBox x:Name="TextBox" Style="{StaticResource InputBox}" Margin="0,0,0,10"
+                                 TextChanged="Text_Changed"/>
+
+                        <!-- 颜色参数 -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="颜色参数（hex，如 #FFEB3B）" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="ColorBox" Style="{StaticResource InputBox}"
+                                         TextChanged="Color_Changed"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Bottom">
+                                <Border x:Name="ColorPreview" Width="40" Height="28" CornerRadius="4"
+                                        BorderBrush="#CCC" BorderThickness="1" Background="#FFEB3B"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="CloseBtn" Content="关闭" Style="{StaticResource SecondaryBtn}"
+                    Click="CloseBtn_Click" Padding="18,8"/>
+        </StackPanel>
+    </Grid>
+</Window>

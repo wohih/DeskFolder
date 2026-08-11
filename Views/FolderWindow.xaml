@@ -8,8 +8,10 @@
         ResizeMode="NoResize"
         MinWidth="0" MinHeight="0" MaxWidth="4000" MaxHeight="4000"
         Width="150" Height="150"
+        AllowDrop="True"
         Deactivated="Window_Deactivated"
-        MouseEnter="Window_MouseEnter" MouseLeave="Window_MouseLeave">
+        MouseEnter="Window_MouseEnter" MouseLeave="Window_MouseLeave"
+        DragOver="Window_DragOver" Drop="Window_Drop">
 
     <Window.Resources>
         <ContextMenu x:Key="FolderMenu" Opened="FolderMenu_Opened" Closed="FolderMenu_Closed">
@@ -20,6 +22,7 @@
             <MenuItem Header="折叠图标大小设置…" Click="SizeMenu_Click"/>
             <MenuItem Header="折叠图标显示排列…" Click="ArrangeMenu_Click"/>
             <MenuItem Header="外观设置…" Click="AppearanceMenu_Click"/>
+            <MenuItem Header="插件管理…" Click="PluginsMenu_Click"/>
             <Separator/>
             <MenuItem Header="删除该文件夹" Tag="Delete" Foreground="#C0392B" Click="DeleteMenu_Click"/>
             <Separator/>
@@ -29,6 +32,14 @@
 
     <!-- 外边距留给阴影，透明区域不接收鼠标事件，点击可穿透到桌面 -->
     <Grid x:Name="Root">
+
+        <!-- 插件宿主容器：覆盖整个窗口，用于渲染折叠态/展开态的美化插件（时钟/便签/日历等）；Z 序高于内容但不阻挡 hit test -->
+        <Grid x:Name="PluginHostCollapsed" Panel.ZIndex="20" Margin="24"
+              HorizontalAlignment="Left" VerticalAlignment="Top"
+              IsHitTestVisible="False"/>
+        <Grid x:Name="PluginHostExpanded" Panel.ZIndex="20" Margin="24"
+              HorizontalAlignment="Left" VerticalAlignment="Top"
+              IsHitTestVisible="False"/>
 
         <!-- 折叠态：安卓风格文件夹图标（≈2×2 桌面图标格，内部 3×3 预览）；左上角锚定，与面板同角生长 -->
         <Grid x:Name="CollapsedView" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="24">
@@ -101,12 +112,15 @@
                             Click="CollapseButton_Click" ToolTip="收起"/>
                 </Grid>
 
-                <!-- 可滚动的图标网格 -->
+                <!-- 可滚动的图标 + 插件混合网格 -->
                 <ScrollViewer Grid.Row="1" x:Name="IconScroller"
                               VerticalScrollBarVisibility="Visible"
                               HorizontalScrollBarVisibility="Disabled"
                               PanningMode="VerticalOnly"
-                              Margin="8,0,8,10">
+                              Margin="8,0,8,10"
+                              AllowDrop="True"
+                              DragOver="IconGrid_DragOver"
+                              Drop="IconGrid_Drop">
                     <ScrollViewer.Resources>
                         <!-- 与黑色半透明面板适配的细圆角半透明滚动条 -->
                         <Style TargetType="ScrollBar">
@@ -145,7 +159,9 @@
                             </Setter>
                         </Style>
                     </ScrollViewer.Resources>
-                    <UniformGrid x:Name="IconGrid" Columns="4"/>
+                    <Grid x:Name="IconGrid" AllowDrop="True"
+                          DragOver="IconGrid_DragOver"
+                          Drop="IconGrid_Drop"/>
                 </ScrollViewer>
 
                 <!-- 底部标题栏：文字位置=底部时承载 PanelTitle（其余情况隐藏） -->
