@@ -41,6 +41,9 @@
               HorizontalAlignment="Left" VerticalAlignment="Top"
               IsHitTestVisible="False"/>
 
+        <!-- 窗口级浮层：隐藏软件名称模式下的悬停名称标签（在格子外，不受 Dock 缩放影响、不被滚动区裁剪） -->
+        <Canvas x:Name="OverlayLayer" Panel.ZIndex="30" IsHitTestVisible="False"/>
+
         <!-- 折叠态：安卓风格文件夹图标（≈2×2 桌面图标格，内部 3×3 预览）；左上角锚定，与面板同角生长 -->
         <Grid x:Name="CollapsedView" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="24">
                 <Border x:Name="FolderChip" CornerRadius="18" Background="#99000000"

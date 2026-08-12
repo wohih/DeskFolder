@@ -12,6 +12,8 @@ out_rel*/
 publish/
 publish_stage/
 _archive/
+# 本地回滚备份（含发布 exe 与 .bak 源码快照，非源码）
+backup/
 *.zip
 *.7z
 *.tar.gz

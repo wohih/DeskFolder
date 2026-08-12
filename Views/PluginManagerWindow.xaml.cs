@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using DeskFolder.Services;
 
 namespace DeskFolder.Views;
@@ -14,6 +15,7 @@ public partial class PluginManagerWindow : Window
     private static SettingsService S => App.Settings;
     private readonly FolderConfig _folder;
     private bool _suppress;
+    private readonly DispatcherTimer _saveDebounce; // 高频微调的防抖保存定时器
 
     /// <summary>显示用包装类：把 FolderPlugin 加一个友好显示名，方便 ListBox 展示。</summary>
     private class PluginDisplay
@@ -37,6 +39,12 @@ public partial class PluginManagerWindow : Window
         InitializeComponent();
         _folder = folder;
         FolderNameLabel.Text = "文件夹：" + folder.Name;
+
+        // 高频微调的防抖保存：停止编辑 600ms 后才写盘，避免拖动滑块/输入时高频写 settings.json
+        _saveDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); S.Save(); };
+        Closing += (_, _) => { _saveDebounce.Stop(); S.Save(); }; // 关闭时立即落盘未保存的改动
+
         LoadList();
     }
 
@@ -108,6 +116,8 @@ public partial class PluginManagerWindow : Window
         UpdateColorPreview(p.Color);
         LyricFontSlider.Value = p.LyricFontSize;
         LyricFontVal.Text = p.LyricFontSize == 0 ? "自动" : p.LyricFontSize.ToString();
+        // 音乐播放器插件仅在空文件夹生效，给出提示
+        MusicOnlyEmptyHint.Visibility = p.Type == FolderPluginType.MusicPlayer ? Visibility.Visible : Visibility.Collapsed;
         _suppress = false;
     }
 
@@ -175,7 +185,7 @@ public partial class PluginManagerWindow : Window
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
         pd.Plugin.Size = (int)SizeSlider.Value;
         SizeVal.Text = pd.Plugin.Size == 0 ? "默认" : pd.Plugin.Size.ToString();
-        S.Save();
+        ScheduleSave();
     }
 
     private static bool TryParseDouble(TextBox box, out double val)
@@ -188,22 +198,22 @@ public partial class PluginManagerWindow : Window
     private void CollapsedOffsetX_Changed(object sender, TextChangedEventArgs e)
     {
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
-        if (TryParseDouble(CollapsedOffsetXBox, out var v)) { pd.Plugin.CollapsedOffsetX = v; S.Save(); }
+        if (TryParseDouble(CollapsedOffsetXBox, out var v)) { pd.Plugin.CollapsedOffsetX = v; ScheduleSave(); }
     }
     private void CollapsedOffsetY_Changed(object sender, TextChangedEventArgs e)
     {
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
-        if (TryParseDouble(CollapsedOffsetYBox, out var v)) { pd.Plugin.CollapsedOffsetY = v; S.Save(); }
+        if (TryParseDouble(CollapsedOffsetYBox, out var v)) { pd.Plugin.CollapsedOffsetY = v; ScheduleSave(); }
     }
     private void ExpandedOffsetX_Changed(object sender, TextChangedEventArgs e)
     {
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
-        if (TryParseDouble(ExpandedOffsetXBox, out var v)) { pd.Plugin.ExpandedOffsetX = v; S.Save(); }
+        if (TryParseDouble(ExpandedOffsetXBox, out var v)) { pd.Plugin.ExpandedOffsetX = v; ScheduleSave(); }
     }
     private void ExpandedOffsetY_Changed(object sender, TextChangedEventArgs e)
     {
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
-        if (TryParseDouble(ExpandedOffsetYBox, out var v)) { pd.Plugin.ExpandedOffsetY = v; S.Save(); }
+        if (TryParseDouble(ExpandedOffsetYBox, out var v)) { pd.Plugin.ExpandedOffsetY = v; ScheduleSave(); }
     }
 
     private void Text_Changed(object sender, TextChangedEventArgs e)
@@ -219,7 +229,7 @@ public partial class PluginManagerWindow : Window
             PluginList.SelectedIndex = idx;
             _suppress = false;
         }
-        S.Save();
+        ScheduleSave();
     }
 
     private void Color_Changed(object sender, TextChangedEventArgs e)
@@ -227,7 +237,7 @@ public partial class PluginManagerWindow : Window
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
         pd.Plugin.Color = ColorBox.Text;
         UpdateColorPreview(pd.Plugin.Color);
-        S.Save();
+        ScheduleSave();
     }
 
     private void LyricFontSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -235,7 +245,7 @@ public partial class PluginManagerWindow : Window
         if (_suppress || PluginList.SelectedItem is not PluginDisplay pd) return;
         pd.Plugin.LyricFontSize = (int)LyricFontSlider.Value;
         LyricFontVal.Text = pd.Plugin.LyricFontSize == 0 ? "自动" : pd.Plugin.LyricFontSize.ToString();
-        S.Save();
+        ScheduleSave();
     }
 
     private void RemoveBtn_Click(object sender, RoutedEventArgs e)
@@ -244,6 +254,13 @@ public partial class PluginManagerWindow : Window
         _folder.Plugins?.Remove(pd.Plugin);
         LoadList();
         S.Save();
+    }
+
+    /// <summary>高频微调的防抖保存：停止编辑 600ms 后才真正写盘（结构性改动仍走 S.Save() 立即生效）。</summary>
+    private void ScheduleSave()
+    {
+        _saveDebounce.Stop();
+        _saveDebounce.Start();
     }
 
     private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();

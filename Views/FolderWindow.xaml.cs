@@ -39,6 +39,7 @@ public partial class FolderWindow : Window
     // 折叠图标采用固定单元格像素尺寸（不再探测/吸附桌面网格）
     private const double IconCell = 75;   // 单个桌面图标格像素基准（折叠加倍）
     private const double IconSize = 32;   // 展开单元格内图标绘制尺寸
+    private const double IconSizeNoName = 46; // 隐藏软件名称模式下展开单元格内图标绘制尺寸（放大防止间隙过大）
     private const double FoldMin = 60;    // 折叠图标自由缩放最小边（像素）
     private const double FoldMax = 600;   // 折叠图标自由缩放最大边（像素）
     private const double DefaultFoldPx = 150; // 折叠图标默认像素尺寸（未拖拽时）
@@ -122,11 +123,14 @@ public partial class FolderWindow : Window
     private TextBlock? _musicTitleMarquee;
     private TextBlock? _musicArtistText;
     private Border? _musicAlbumArt;
+    private UIElement? _musicAlbumArtContent; // 折叠态封面占位内容（K logo 渐变），有真实封面时隐藏
     private Button? _musicPlayPauseBtn;
     private Button? _musicPrevBtn;
     private Button? _musicNextBtn;
 
     // 展开态UI元素引用
+    private Border? _musicExpandedAlbumArt;
+    private UIElement? _musicExpandedAlbumArtContent; // 展开态封面占位内容
     private TextBlock? _musicExpandedTitle;
     private TextBlock? _musicExpandedArtist;
     private Button? _musicExpandedPlayPauseBtn;
@@ -136,6 +140,43 @@ public partial class FolderWindow : Window
     private ScrollViewer? _musicLyricsScroll;
     private StackPanel? _musicLyricsPanel;
     private readonly List<TextBlock> _musicLyricLineElements = new();
+
+    // 歌词平滑滚动动画状态：CompositionTarget.Rendering 帧驱动（与展开/收起动画共用 OnRenderFrame 订阅），
+    // 动画结束即退订；动画中来新目标时从当前实际偏移重定向。
+    private bool _lyricsAnimActive;
+    private double _lyricsAnimFrom;
+    private double _lyricsAnimTo;
+    private long _lyricsAnimStartTicks;
+    private const int LyricsAnimMs = 400; // 滚动时长（需求区间 350-450ms）
+    private bool _lyricsSnapNext;         // RebuildLyricsPanel 后置位：下次滚动直接落位
+    private int _lastLyricIndex = -1;     // 上一个当前行索引（首次 -1→0 直接落位）
+
+    // 隐藏软件名称模式的悬停名称标签：MouseEnter 后延迟 ~700ms 在图标上方浮出（窗口级 OverlayLayer，
+    // 在格子之外，不受 Dock 缩放影响）；MouseLeave/点击/拖拽开始立即取消并隐藏；同一时间只有一个。
+    private readonly DispatcherTimer _hoverNameTimer;  // 悬停延迟计时器
+    private Border? _hoverNameLabel;                   // 当前显示的名称浮层（OverlayLayer 内）
+    private Border? _hoverNameCell;                    // 悬停延迟中 / 显示中的目标格子
+    private string _hoverNameText = "";                // 待显示的名称文本
+    private const int HoverNameDelayMs = 700;          // 悬停多久后浮出名称
+
+    // Dock 放大（Magnification）：展开态鼠标附近快捷方式格子随距离平滑放大（macOS Dock 风格）。
+    // 帧驱动挂进 OnRenderFrame 调度器（_magnifyActive 门控，仿 _lyricsAnimActive 模式）；
+    // 缩放用 RenderTransform（ScaleTransform，中心原点），不引起重新布局；插件格子不参与。
+    private const double MagnifyMaxExtra = 0.4;        // 中心格子最大额外放大比例（32→~45）
+    private const double MagnifyRadiusFactor = 1.2;    // 影响半径 = 1.2 × IconCell
+    private const double MagnifyLerp = 0.25;           // 每帧当前缩放向目标逼近的插值系数
+    private const double MagnifyDeadZone = 0.01;       // 死区：与目标差值小于该值直接置目标，防永动
+    private bool _magnifyActive;                       // 放大动画是否挂在帧调度器上
+    private bool _magnifyMouseInside;                  // 鼠标是否在 IconGrid 内（离开则全部回 1.0）
+    private readonly List<MagnifyCell> _magnifyCells = new(); // 参与放大的快捷方式格子（随 BuildGrid 重建）
+
+    /// <summary>参与 Dock 放大的快捷方式格子：单元格 + 其 RenderTransform 缩放实例 + 当前目标缩放。</summary>
+    private sealed class MagnifyCell
+    {
+        public FrameworkElement Cell = null!;
+        public ScaleTransform Scale = null!;
+        public double Target = 1.0;
+    }
 
     private static SettingsService S => App.Settings;
 
@@ -174,8 +215,16 @@ public partial class FolderWindow : Window
             if (!IsMouseOver && !_gridItemDragging) Collapse();
         };
 
+        // 隐藏软件名称模式：悬停延迟后浮出名称标签
+        _hoverNameTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoverNameDelayMs) };
+        _hoverNameTimer.Tick += (_, _) => { _hoverNameTimer.Stop(); ShowHoverNameLabel(); };
+
+        // Dock 放大：在展开态 IconGrid 上跟踪鼠标（事件由格子向上冒泡到 IconGrid）
+        IconGrid.MouseMove += IconGrid_MagnifyMouseMove;
+        IconGrid.MouseLeave += IconGrid_MagnifyMouseLeave;
+
         Loaded += OnLoaded;
-        Closed += (_, _) => StopGifTimers(); // 窗口关闭时释放 GIF 计时器，避免泄漏
+        Closed += (_, _) => { StopGifTimers(); CleanupMusicService(); }; // 关闭时释放 GIF 计时器并退订共享音乐服务，避免泄漏
     }
 
     // ---------------- 原生窗口样式：隐藏任务切换器 / 桌面挂件化（兼容 Wallpaper Engine） ----------------
@@ -375,6 +424,10 @@ public partial class FolderWindow : Window
     /// <summary>展开面板中的图标+插件混合网格</summary>
     private void BuildGrid()
     {
+        // 重建网格：清空 Dock 放大登记（旧格子的 ScaleTransform 一并失效）并隐藏可能残留的名称浮层
+        _magnifyCells.Clear();
+        HideHoverNameLabel();
+
         int cols = Math.Max(1, EffectiveCols);
         int rows = Math.Max(EffectiveRows, 5); // 至少5行以容纳插件
 
@@ -604,6 +657,7 @@ public partial class FolderWindow : Window
             if (dist > 5)
             {
                 _gridItemDragging = true;
+                OnGridDragBegin(); // 拖拽开始：取消名称浮层、Dock 放大归零
                 // 释放鼠标捕获，让 DoDragDrop 接管
                 if (wrapper.IsMouseCaptured) wrapper.ReleaseMouseCapture();
 
@@ -646,10 +700,13 @@ public partial class FolderWindow : Window
         return wrapper;
     }
 
-    /// <summary>构建网格中的快捷方式单元格（支持拖拽）</summary>
+    /// <summary>构建网格中的快捷方式单元格（支持拖拽）。
+    /// 主题开启「隐藏软件名称」时：不创建名称 TextBlock、图标放大为 IconSizeNoName、移除默认 ToolTip，
+    /// 改为悬停延迟后在图标上方浮出名称标签。</summary>
     private UIElement BuildCell(ShortcutItem item)
     {
-        double icon = Math.Max(IconSize, 34);
+        bool hideNames = S.GetThemeForFolder(_config.FolderThemeId).HideShortcutNames;
+        double icon = hideNames ? IconSizeNoName : Math.Max(IconSize, 34);
         double cellW = IconCell, cellH = IconCell;
 
         var img = new System.Windows.Controls.Image
@@ -659,19 +716,23 @@ public partial class FolderWindow : Window
             HorizontalAlignment = System.Windows.HorizontalAlignment.Center
         };
         var textColor = CurrentTextColor();
-        var text = new TextBlock
+        TextBlock? text = null;
+        if (!hideNames)
         {
-            Text = item.Name,
-            FontSize = Math.Max(10, icon * 0.34),
-            Foreground = new SolidColorBrush(textColor),
-            TextAlignment = TextAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = cellW - 10,
-            Margin = new Thickness(0, 3, 0, 0),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Center
-        };
-        if (IsImageMode())
-            text.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 3, Opacity = 0.8, ShadowDepth = 0 };
+            text = new TextBlock
+            {
+                Text = item.Name,
+                FontSize = Math.Max(10, icon * 0.34),
+                Foreground = new SolidColorBrush(textColor),
+                TextAlignment = TextAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = cellW - 10,
+                Margin = new Thickness(0, 3, 0, 0),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+            };
+            if (IsImageMode())
+                text.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 3, Opacity = 0.8, ShadowDepth = 0 };
+        }
         var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
 
         var border = new Border
@@ -680,15 +741,30 @@ public partial class FolderWindow : Window
             Height = cellH - 6,
             CornerRadius = new CornerRadius(8),
             Cursor = System.Windows.Input.Cursors.Hand,
-            ToolTip = item.Name,
+            // 隐藏名称模式下移除默认 ToolTip（避免与悬停名称浮层重复显示）
+            ToolTip = hideNames ? null : item.Name,
             Child = stack
         };
         stack.Children.Add(img);
-        stack.Children.Add(text);
+        if (text != null) stack.Children.Add(text);
 
         // 设置图标标识用于拖拽
         border.SetValue(DragIdProperty, item.LinkPath);
         border.SetValue(DragTypeProperty, "shortcut");
+
+        // Dock 放大：中心原点 ScaleTransform（RenderTransform，绝不引起重新布局）；仅快捷方式格子参与
+        var magnifyScale = new ScaleTransform(1, 1);
+        border.RenderTransform = magnifyScale;
+        border.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
+        _magnifyCells.Add(new MagnifyCell { Cell = border, Scale = magnifyScale });
+
+        // 隐藏名称模式：悬停延迟浮出名称标签；MouseLeave / 点击 / 拖拽开始立即取消
+        if (hideNames)
+        {
+            border.MouseEnter += (_, _) => BeginHoverNameDelay(border, item.Name);
+            border.MouseLeave += (_, _) => CancelHoverName();
+            border.MouseLeftButtonDown += (_, _) => CancelHoverName();
+        }
 
         // 拖拽支持
         bool isDragging = false;
@@ -715,6 +791,7 @@ public partial class FolderWindow : Window
             {
                 dragStarted = true;
                 _gridItemDragging = true;
+                OnGridDragBegin(); // 拖拽开始：取消名称浮层、Dock 放大归零
                 // 释放鼠标捕获，让 DoDragDrop 接管
                 if (border.IsMouseCaptured) border.ReleaseMouseCapture();
 
@@ -853,6 +930,7 @@ public partial class FolderWindow : Window
 
         _animating = true;
         _collapseTimer.Stop();
+        HideHoverNameLabel(); // 收起时隐藏可能残留的名称浮层
         CollapsedView.Visibility = Visibility.Visible;
         int ms = Math.Max((int)(S.Data.AnimationMs * 1.5), 300);
 
@@ -881,6 +959,7 @@ public partial class FolderWindow : Window
             _musicLyricsScroll = null;
             _musicLyricsPanel = null;
             _musicLyricLineElements.Clear();
+            _lyricsAnimActive = false; // 展开态歌词UI已销毁，停掉在途滚动动画
         }
         if (IconScroller != null)
         {
@@ -929,6 +1008,20 @@ public partial class FolderWindow : Window
 
     private void OnRenderFrame(object? sender, EventArgs e)
     {
+        // 展开/收起面板动画、歌词滚动动画与 Dock 放大动画共用本订阅：各自推进，全部结束才退订（不留常驻钩子）。
+        // 面板部分由 _animating 门控；歌词/放大动画各自由 _lyricsAnimActive / _magnifyActive 门控，互不误触。
+        if (_animating)
+            OnPanelAnimFrame();
+        OnLyricsAnimFrame();
+        if (_magnifyActive)
+            OnMagnifyFrame();
+        if (!_animating && !_lyricsAnimActive && !_magnifyActive)
+            CompositionTarget.Rendering -= OnRenderFrame;
+    }
+
+    /// <summary>展开/收起面板动画帧推进（原 OnRenderFrame 面板部分，逻辑不变）</summary>
+    private void OnPanelAnimFrame()
+    {
         double elapsedMs = (Stopwatch.GetTimestamp() - _animStartTicks) / (double)Stopwatch.Frequency * 1000.0;
         double p = Math.Min(1.0, elapsedMs / _animMs);
         double k = EaseInOutCubic(p); // 使用更平滑的 InOutCubic 缓动
@@ -952,7 +1045,7 @@ public partial class FolderWindow : Window
 
         if (p >= 1.0)
         {
-            CompositionTarget.Rendering -= OnRenderFrame;
+            // 退订由 OnRenderFrame 末尾统一处理（歌词动画可能仍在进行）
             _animating = false;
 
             if (_animExpand)
@@ -1036,6 +1129,208 @@ public partial class FolderWindow : Window
         return p < 0.5
             ? 4 * p * p * p
             : 1.0 - Math.Pow(-2 * p + 2, 3) / 2.0;
+    }
+
+    // EaseOutCubic 缓动：起步快、收尾缓，用于歌词换行平滑滚动
+    private static double EaseOutCubic(double p)
+    {
+        return 1.0 - Math.Pow(1.0 - p, 3);
+    }
+
+    /// <summary>启动歌词平滑滚动动画：从当前实际偏移滚到目标偏移（EaseOutCubic，帧驱动）。
+    /// 动画进行中重定向时，从当前实际位置起新动画，不跳变、不叠钩子。</summary>
+    private void StartLyricsScrollAnimation(double targetOffset)
+    {
+        if (_musicLyricsScroll == null) return;
+
+        _lyricsAnimFrom = _musicLyricsScroll.VerticalOffset; // 动画在途时此为上一帧实际位置
+        _lyricsAnimTo = targetOffset;
+
+        // 目标与当前位置基本一致：无需动画，直接落位
+        if (Math.Abs(_lyricsAnimTo - _lyricsAnimFrom) < 0.5)
+        {
+            _lyricsAnimActive = false;
+            _musicLyricsScroll.ScrollToVerticalOffset(targetOffset);
+            return;
+        }
+
+        _lyricsAnimStartTicks = Stopwatch.GetTimestamp();
+        _lyricsAnimActive = true;
+        // 与面板动画共用 OnRenderFrame；先减后加避免重复订阅
+        CompositionTarget.Rendering -= OnRenderFrame;
+        CompositionTarget.Rendering += OnRenderFrame;
+    }
+
+    /// <summary>歌词平滑滚动动画帧推进；结束或滚动控件已销毁即停止（退订由 OnRenderFrame 统一处理）。</summary>
+    private void OnLyricsAnimFrame()
+    {
+        if (!_lyricsAnimActive) return;
+
+        if (_musicLyricsScroll == null)
+        {
+            _lyricsAnimActive = false;
+            return;
+        }
+
+        double elapsedMs = (Stopwatch.GetTimestamp() - _lyricsAnimStartTicks) / (double)Stopwatch.Frequency * 1000.0;
+        double p = Math.Min(1.0, elapsedMs / LyricsAnimMs);
+        double k = EaseOutCubic(p);
+        _musicLyricsScroll.ScrollToVerticalOffset(_lyricsAnimFrom + (_lyricsAnimTo - _lyricsAnimFrom) * k);
+        if (p >= 1.0)
+            _lyricsAnimActive = false;
+    }
+
+    // ---------------- 隐藏软件名称：悬停延迟名称浮层 ----------------
+
+    /// <summary>隐藏名称模式：MouseEnter 后启动延迟计时，超时在图标上方浮出名称标签（同一时间只有一个）。</summary>
+    private void BeginHoverNameDelay(Border cell, string name)
+    {
+        if (!_expanded || _gridItemDragging) return;
+        if (ReferenceEquals(_hoverNameCell, cell)) return; // 同一格子重复进入：保持现状（计时中或已显示）
+        HideHoverNameLabel();
+        _hoverNameCell = cell;
+        _hoverNameText = name;
+        _hoverNameTimer.Stop();
+        _hoverNameTimer.Start();
+    }
+
+    /// <summary>取消悬停延迟并立即隐藏名称浮层（MouseLeave / 点击 / 拖拽开始时调用）。</summary>
+    private void CancelHoverName() => HideHoverNameLabel();
+
+    /// <summary>立即停止计时并隐藏名称浮层（BuildGrid 重建 / 收起时也调用，防止浮层引用已销毁的格子）。</summary>
+    private void HideHoverNameLabel()
+    {
+        _hoverNameTimer.Stop();
+        if (_hoverNameLabel != null)
+        {
+            OverlayLayer.Children.Remove(_hoverNameLabel);
+            _hoverNameLabel = null;
+        }
+        _hoverNameCell = null;
+    }
+
+    /// <summary>延迟到达：在目标格子的图标上方浮出名称标签。
+    /// 浮层挂在窗口级 OverlayLayer（格子之外）：不受 Dock 缩放影响、不被 ScrollViewer 裁剪、不改变网格布局。</summary>
+    private void ShowHoverNameLabel()
+    {
+        var cell = _hoverNameCell;
+        if (cell == null || !_expanded || _gridItemDragging) return;
+        if (!cell.IsVisible) { _hoverNameCell = null; return; }
+
+        // 圆角深色半透明底 + 名称文字；颜色/投影遵循 CurrentTextColor() 与 IsImageMode() 规则
+        var tb = new TextBlock
+        {
+            Text = _hoverNameText,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(CurrentTextColor())
+        };
+        if (IsImageMode())
+            tb.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 3, Opacity = 0.8, ShadowDepth = 0 };
+        var label = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x14, 0x14, 0x14)),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(7, 3, 7, 3),
+            Child = tb
+        };
+
+        // 定位：水平对齐格中心，底边贴在图标上沿（计入当前 Dock 缩放后的图标实际高度）
+        label.Measure(new WpfSize(double.PositiveInfinity, double.PositiveInfinity));
+        var cellPos = cell.TranslatePoint(new WpfPoint(0, 0), Root);
+        double scale = cell.RenderTransform is ScaleTransform st ? st.ScaleX : 1.0;
+        double iconExtent = IconSizeNoName * scale;
+        double centerX = cellPos.X + cell.ActualWidth / 2;
+        double iconTop = cellPos.Y + (cell.ActualHeight - iconExtent) / 2;
+        double x = centerX - label.DesiredSize.Width / 2;
+        double y = iconTop - label.DesiredSize.Height - 4;
+        if (y < 2) y = cellPos.Y + 2; // 首行顶部空间不足时退为浮在格子上沿内侧，避免被窗口边缘裁掉
+        Canvas.SetLeft(label, x);
+        Canvas.SetTop(label, y);
+
+        OverlayLayer.Children.Add(label);
+        _hoverNameLabel = label;
+    }
+
+    // ---------------- Dock 放大（展开态鼠标附近图标随距离平滑放大） ----------------
+
+    /// <summary>IconGrid 鼠标移动：按鼠标到各格中心距离更新目标缩放，并确保放大动画帧已挂载。</summary>
+    private void IconGrid_MagnifyMouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (!_expanded || _gridItemDragging || _magnifyCells.Count == 0) return;
+        _magnifyMouseInside = true;
+        UpdateMagnifyTargets(e.GetPosition(IconGrid));
+        EnsureMagnifyRunning();
+    }
+
+    /// <summary>鼠标离开 IconGrid：全部格子目标归零，平滑缩回 1.0 后动画自动停止。</summary>
+    private void IconGrid_MagnifyMouseLeave(object sender, WpfMouseEventArgs e)
+    {
+        _magnifyMouseInside = false;
+        ResetMagnifyTargets();
+        EnsureMagnifyRunning();
+    }
+
+    /// <summary>网格项拖拽开始：取消名称浮层，Dock 放大目标全部归零（拖拽进行中暂停放大）。</summary>
+    private void OnGridDragBegin()
+    {
+        CancelHoverName();
+        _magnifyMouseInside = false;
+        ResetMagnifyTargets();
+        EnsureMagnifyRunning();
+    }
+
+    /// <summary>按余弦衰减计算各格目标缩放：d=0 时为 1+MaxExtra，d≥R（1.2×IconCell）时归零（目标 1.0）。
+    /// 放大越多 Z 序越高，放大格子可覆盖相邻格子（Panel.ZIndex 不引起重新布局）。</summary>
+    private void UpdateMagnifyTargets(WpfPoint mouse)
+    {
+        double radius = MagnifyRadiusFactor * IconCell;
+        foreach (var mc in _magnifyCells)
+        {
+            var center = mc.Cell.TranslatePoint(
+                new WpfPoint(mc.Cell.ActualWidth / 2, mc.Cell.ActualHeight / 2), IconGrid);
+            double dx = center.X - mouse.X, dy = center.Y - mouse.Y;
+            double d = Math.Sqrt(dx * dx + dy * dy);
+            double falloff = d >= radius ? 0 : 0.5 * (1 + Math.Cos(Math.PI * d / radius));
+            mc.Target = 1 + MagnifyMaxExtra * falloff;
+            System.Windows.Controls.Panel.SetZIndex(mc.Cell, (int)Math.Round((mc.Target - 1) * 100));
+        }
+    }
+
+    /// <summary>全部格子目标缩放归零（1.0）并还原 Z 序。</summary>
+    private void ResetMagnifyTargets()
+    {
+        foreach (var mc in _magnifyCells)
+        {
+            mc.Target = 1.0;
+            System.Windows.Controls.Panel.SetZIndex(mc.Cell, 0);
+        }
+    }
+
+    /// <summary>把放大动画挂进 OnRenderFrame 帧调度器（订阅"先减后加"，仿歌词动画模式）。</summary>
+    private void EnsureMagnifyRunning()
+    {
+        if (_magnifyActive || _magnifyCells.Count == 0) return;
+        _magnifyActive = true;
+        CompositionTarget.Rendering -= OnRenderFrame;
+        CompositionTarget.Rendering += OnRenderFrame;
+    }
+
+    /// <summary>放大动画帧：每帧当前缩放向目标 lerp（k=0.25），死区 &lt;0.01 直接置目标防永动；
+    /// 拖拽进行中 / 鼠标已离开时目标强制为 1.0；全部稳定后停止（标志归 false，参与统一退订）。</summary>
+    private void OnMagnifyFrame()
+    {
+        bool settled = true;
+        foreach (var mc in _magnifyCells)
+        {
+            double target = (_gridItemDragging || !_magnifyMouseInside) ? 1.0 : mc.Target;
+            double cur = mc.Scale.ScaleX;
+            double next = cur + (target - cur) * MagnifyLerp;
+            if (Math.Abs(next - target) < MagnifyDeadZone) next = target;
+            else settled = false;
+            mc.Scale.ScaleX = next;
+            mc.Scale.ScaleY = next;
+        }
+        if (settled) _magnifyActive = false;
     }
 
     // ---------------- 鼠标交互（悬停展开 / 移开收起 / 折叠态拖动） ----------------
@@ -2881,6 +3176,7 @@ public partial class FolderWindow : Window
         };
         albumContent.Children.Add(kugouLogo);
         albumArt.Child = albumContent;
+        _musicAlbumArtContent = albumContent;
 
         // 点击专辑封面打开酷狗
         albumArt.MouseLeftButtonDown += (_, _) =>
@@ -2914,7 +3210,7 @@ public partial class FolderWindow : Window
         // 艺术家
         var artistTb = new TextBlock
         {
-            Text = "请打开酷狗音乐",
+            Text = "未在播放音乐",
             Foreground = new SolidColorBrush(Color.FromArgb(0xBB, 0xFF, 0xFF, 0xFF)),
             FontSize = Math.Max(8, w * 0.045),
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -2974,23 +3270,7 @@ public partial class FolderWindow : Window
         double ctrlBtnSize = Math.Max(18, Math.Min(w * 0.1, h * 0.12));
         var ctrlForeground = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF));
 
-        // 收藏按钮（左侧心形）
-        var favBtn = new Button
-        {
-            Width = ctrlBtnSize,
-            Height = ctrlBtnSize,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            ToolTip = "收藏"
-        };
-        favBtn.Content = new System.Windows.Shapes.Path
-        {
-            Data = GetOrCreateGeom("heart", ctrlBtnSize, CreateHeartPath),
-            Fill = ctrlForeground
-        };
-        Grid.SetColumn(favBtn, 0);
-        controls.Children.Add(favBtn);
+        // 注：收藏按钮无对应媒体键/酷狗接口（点击无响应，死按钮），已隐藏；待后续有实现方案再加回。
 
         // 上一曲按钮
         var prevBtn = new Button
@@ -3245,6 +3525,8 @@ public partial class FolderWindow : Window
         };
         expAlbumContent.Children.Add(expKLogo);
         expAlbumArt.Child = expAlbumContent;
+        _musicExpandedAlbumArt = expAlbumArt;
+        _musicExpandedAlbumArtContent = expAlbumContent;
         expAlbumArt.MouseLeftButtonDown += (_, _) => _musicService?.OpenKugou();
         Grid.SetColumn(expAlbumArt, 0);
         topBar.Children.Add(expAlbumArt);
@@ -3265,7 +3547,7 @@ public partial class FolderWindow : Window
 
         var expArtist = new TextBlock
         {
-            Text = "请打开酷狗音乐",
+            Text = "未在播放音乐",
             Foreground = new SolidColorBrush(Color.FromArgb(0xBB, 0xFF, 0xFF, 0xFF)),
             FontSize = Math.Max(10, width * 0.03),
             TextTrimming = TextTrimming.CharacterEllipsis
@@ -3408,18 +3690,7 @@ public partial class FolderWindow : Window
         double expCtrlSize = Math.Max(22, Math.Min(width * 0.05, height * 0.07));
         var ctrlFg = new SolidColorBrush(Color.FromArgb(0xDD, 0xFF, 0xFF, 0xFF));
 
-        // 收藏
-        var expFav = new Button
-        {
-            Width = expCtrlSize,
-            Height = expCtrlSize,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            Content = new System.Windows.Shapes.Path { Data = GetOrCreateGeom("heart", expCtrlSize, CreateHeartPath), Fill = ctrlFg }
-        };
-        Grid.SetColumn(expFav, 0);
-        expControls.Children.Add(expFav);
+        // 注：收藏按钮无对应媒体键/酷狗接口（点击无响应，死按钮），已隐藏；待后续有实现方案再加回。
 
         // 上一曲
         var expPrev = new Button
@@ -3489,7 +3760,7 @@ public partial class FolderWindow : Window
             string artist = _musicService.CurrentArtist;
 
             string titleDisplay = string.IsNullOrEmpty(title) ? "未检测到音乐" : title;
-            string artistDisplay = string.IsNullOrEmpty(artist) ? "请打开酷狗音乐" : artist;
+            string artistDisplay = string.IsNullOrEmpty(artist) ? "未在播放音乐" : artist;
 
             // 更新折叠态UI（仅在值实际变化时更新，避免无意义重绘）
             if (_musicTitleMarquee != null && _musicTitleMarquee.Text != titleDisplay)
@@ -3523,6 +3794,11 @@ public partial class FolderWindow : Window
     private void RebuildLyricsPanel()
     {
         if (_musicLyricsPanel == null || _musicService == null) return;
+
+        // 面板重建后旧滚动位置已无意义：停掉在途滚动动画，下次滚动直接落位
+        _lyricsAnimActive = false;
+        _lyricsSnapNext = true;
+        _lastLyricIndex = -1;
 
         try
         {
@@ -3670,7 +3946,25 @@ public partial class FolderWindow : Window
                 // 限制在有效范围内
                 double maxOffset = panelHeight - scrollHeight;
                 offset = Math.Max(0, Math.Min(offset, maxOffset > 0 ? maxOffset : 0));
-                _musicLyricsScroll.ScrollToVerticalOffset(offset);
+
+                // 瞬间落位场景：面板重建后首次 / 首次出现当前行（-1→0）/ 视口未就绪 / 大跨度跳动（如 seek 拖进度）
+                double currentOffset = _musicLyricsScroll.VerticalOffset;
+                bool snap = _lyricsSnapNext
+                    || _lastLyricIndex < 0
+                    || scrollHeight <= 0
+                    || Math.Abs(offset - currentOffset) > scrollHeight * 1.5;
+                _lyricsSnapNext = false;
+                _lastLyricIndex = currentIndex;
+
+                if (snap)
+                {
+                    _lyricsAnimActive = false;
+                    _musicLyricsScroll.ScrollToVerticalOffset(offset);
+                }
+                else
+                {
+                    StartLyricsScrollAnimation(offset);
+                }
             }
         }
         catch (Exception ex)
@@ -3714,20 +4008,64 @@ public partial class FolderWindow : Window
         }
     }
 
+    /// <summary>更新专辑封面显示（折叠态 + 展开态）。有真实封面→ImageBrush 填充并隐藏 K logo；无→恢复占位。</summary>
+    private void UpdateAlbumArtUI()
+    {
+        if (_musicService == null) return;
+        try
+        {
+            var art = _musicService.CurrentAlbumArt;
+            ApplyAlbumArt(_musicAlbumArt, _musicAlbumArtContent, art);
+            ApplyAlbumArt(_musicExpandedAlbumArt, _musicExpandedAlbumArtContent, art);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DeskFolder] UpdateAlbumArtUI error: {ex.Message}");
+        }
+    }
+
+    /// <summary>把封面图应用到某个封面 Border（有图用 ImageBrush 填充并隐藏占位内容，无图恢复半透明灰占位）。</summary>
+    private static void ApplyAlbumArt(Border? artBorder, UIElement? placeholder, BitmapSource? art)
+    {
+        if (artBorder == null) return;
+        if (art != null)
+        {
+            artBorder.Background = new ImageBrush(art) { Stretch = Stretch.UniformToFill };
+            if (placeholder != null) placeholder.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            artBorder.Background = new SolidColorBrush(Color.FromArgb(0x60, 0x44, 0x44, 0x44));
+            if (placeholder != null) placeholder.Visibility = Visibility.Visible;
+        }
+    }
+
     /// <summary>初始化音乐播放器服务（当文件夹包含 MusicPlayer 插件时调用）</summary>
     private void InitMusicService()
     {
         if (_musicService != null) return;
 
-        _musicService = new MusicService();
-        _musicService.SongInfoChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateMusicPlayerUI));
+        // 订阅全局共享单例（App.Music），用命名方法以便 Cleanup 时正确退订
+        _musicService = App.Music;
+        _musicService.SongInfoChanged += OnMusicSongInfoChanged;
         // 播放状态变化：只更新图标，不重建歌词面板（避免丢失滚动位置）
-        _musicService.PlaybackStateChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdatePlayPauseIconsOnly));
-        _musicService.LyricsChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateMusicPlayerUI));
+        _musicService.PlaybackStateChanged += OnMusicPlaybackStateChanged;
+        _musicService.LyricsChanged += OnMusicSongInfoChanged; // 歌词数据变化 → 走完整 UI 刷新（同歌曲信息）
         // 歌词位置变化：仅更新高亮和滚动，不重建面板（高频事件，轻量处理）
-        _musicService.LyricsPositionChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateLyricsPosition));
-        _musicService.Start();
+        _musicService.LyricsPositionChanged += OnMusicLyricsPositionChanged;
+        // 专辑封面变化：更新折叠/展开态封面
+        _musicService.AlbumArtChanged += OnMusicAlbumArtChanged;
+        // 单例由 App 统一 Start/Stop，这里只订阅；并用当前状态立即刷新一次（单例可能已在播放）
+        UpdateMusicPlayerUI();
+        UpdatePlayPauseIconsOnly();
+        UpdateAlbumArtUI();
     }
+
+    // 命名事件处理器（lambda 无法退订；单例共享下必须可退订，否则窗口关闭后仍被 App.Music 持有导致泄漏）
+    private void OnMusicSongInfoChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(UpdateMusicPlayerUI));
+    private void OnMusicPlaybackStateChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(UpdatePlayPauseIconsOnly));
+    private void OnMusicLyricsPositionChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(UpdateLyricsPosition));
+    private void OnMusicAlbumArtChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(UpdateAlbumArtUI));
 
     /// <summary>仅更新播放/暂停图标（不触发歌词面板重建）</summary>
     private void UpdatePlayPauseIconsOnly()
@@ -3748,13 +4086,20 @@ public partial class FolderWindow : Window
     {
         if (_musicService != null)
         {
-            _musicService.Stop();
-            _musicService.Dispose();
+            // 只退订共享单例的事件，不 Stop/Dispose（App.Music 由 App 统一管理生命周期）
+            _musicService.SongInfoChanged -= OnMusicSongInfoChanged;
+            _musicService.PlaybackStateChanged -= OnMusicPlaybackStateChanged;
+            _musicService.LyricsChanged -= OnMusicSongInfoChanged;
+            _musicService.LyricsPositionChanged -= OnMusicLyricsPositionChanged;
+            _musicService.AlbumArtChanged -= OnMusicAlbumArtChanged;
             _musicService = null;
         }
         _musicPlayerPlugin = null;
         _musicPlayerCollapsed = null;
         _musicPlayerExpanded = null;
+        _musicAlbumArtContent = null;
+        _musicExpandedAlbumArt = null;
+        _musicExpandedAlbumArtContent = null;
         _musicPinned = false;
         _musicExpandedTitle = null;
         _musicExpandedArtist = null;
@@ -3765,6 +4110,12 @@ public partial class FolderWindow : Window
         _musicLyricsScroll = null;
         _musicLyricsPanel = null;
         _musicLyricLineElements.Clear();
+        // 停掉歌词滚动动画并复位状态；若展开/收起动画未在跑则同时退订帧回调，防泄漏
+        _lyricsAnimActive = false;
+        _lyricsSnapNext = false;
+        _lastLyricIndex = -1;
+        if (!_animating)
+            CompositionTarget.Rendering -= OnRenderFrame;
     }
     private static Point PointOnCircle(double cx, double cy, double r, double angleDeg)
     {

@@ -13,6 +13,8 @@ public partial class App : System.Windows.Application
     private SettingsWindow? _settingsWindow;
 
     public static SettingsService Settings { get; private set; } = null!;
+    /// <summary>全局共享的音乐服务单例（避免多文件夹各自实例化：多 WinEvent Hook / 定时器 / 重复歌词请求）。</summary>
+    public static MusicService Music { get; private set; } = null!;
 
     // crash.log 写入目录（exe同级+AppData双写，确保用户能找到）
     private static string CrashLogDir
@@ -102,6 +104,10 @@ public partial class App : System.Windows.Application
         };
 
         Settings = SettingsService.Load();
+
+        // 全局音乐服务单例：跟随 App 生命周期启动（检测/控制/歌词全局共享一份）
+        Music = new MusicService();
+        Music.Start();
 
         // 首次运行：自动把桌面上的快捷方式导入默认文件夹
         if (Settings.Data.Folders.Count == 0)
@@ -207,6 +213,7 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         Settings.Save();
+        try { Music.Stop(); Music.Dispose(); } catch { }
         _tray?.Dispose();
         base.OnExit(e);
     }

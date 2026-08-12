@@ -218,6 +218,11 @@
                         </Grid>
                         <Slider x:Name="LyricFontSlider" Minimum="0" Maximum="40" TickFrequency="1"
                                 ValueChanged="LyricFontSlider_Changed" Margin="0,0,0,10"/>
+
+                        <!-- 音乐播放器仅空文件夹生效提示 -->
+                        <TextBlock x:Name="MusicOnlyEmptyHint" Visibility="Collapsed"
+                                   Text="提示：音乐播放器插件仅在「空文件夹」中显示（文件夹内有快捷方式时不生效）。"
+                                   Foreground="#E81123" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                     </StackPanel>
                 </Border>
             </StackPanel>

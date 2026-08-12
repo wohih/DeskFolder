@@ -203,6 +203,9 @@ public class ThemeConfig
     public bool HideTextExpanded { get; set; } = false;
     /// <summary>文字是否加粗</summary>
     public bool TextBold { get; set; } = false;
+    /// <summary>展开态是否隐藏快捷方式名称（图标适当放大，悬停约 700ms 后在图标上方浮出名称标签）；
+    /// 默认 false，旧配置反序列化时自动取默认值（兼容）。</summary>
+    public bool HideShortcutNames { get; set; } = false;
 
     /// <summary>列表用预览画刷（按模式合成）；不参与序列化</summary>
     [JsonIgnore]

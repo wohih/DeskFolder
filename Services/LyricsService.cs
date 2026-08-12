@@ -32,7 +32,11 @@ public static class LyricsService
 
         try
         {
-            return await SearchViaNetEaseAsync(title, artist);
+            // 先带艺术家精确搜索；无结果则用纯标题放宽重试一次（提高命中率/简单降级）
+            var result = await SearchViaNetEaseAsync(title, artist);
+            if (result.Count == 0 && !string.IsNullOrWhiteSpace(artist))
+                result = await SearchViaNetEaseAsync(title, "");
+            return result;
         }
         catch (Exception ex)
         {

@@ -543,6 +543,8 @@
                                       Checked="HideCollapsed_Changed" Unchecked="HideCollapsed_Changed"/>
                             <CheckBox x:Name="HideExpandedCheck" Content="展开状态隐藏文字"
                                       Checked="HideExpanded_Changed" Unchecked="HideExpanded_Changed"/>
+                            <CheckBox x:Name="HideShortcutNamesCheck" Content="隐藏软件名称（悬停显示）" Margin="0,4,0,0"
+                                      Checked="HideShortcutNames_Changed" Unchecked="HideShortcutNames_Changed"/>
                         </StackPanel>
                     </Border>
 
