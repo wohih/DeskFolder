@@ -48,7 +48,7 @@
         <Grid x:Name="CollapsedView" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="24">
                 <Border x:Name="FolderChip" CornerRadius="18" Background="#99000000"
                     AllowDrop="True"
-                    DragEnter="FolderChip_DragEnter" Drop="FolderChip_Drop"
+                    DragEnter="FolderChip_DragEnter" DragOver="FolderChip_DragEnter" Drop="FolderChip_Drop"
                     MouseLeftButtonDown="FolderChip_MouseLeftButtonDown"
                     MouseMove="FolderChip_MouseMove"
                     MouseLeftButtonUp="FolderChip_MouseLeftButtonUp">
@@ -84,20 +84,34 @@
             </Border>
         </Grid>
 
+        <!-- 面板阴影层：与 Panel 形状/尺寸/透明度绑定，但作为并列层（非 Panel 祖先），
+             使 Panel 内部滚动容器可使用 OpacityMask 实现图标边缘淡出（真正的"虚化"），
+             而不受父级 DropShadowEffect 影响。 -->
+        <Border x:Name="PanelShadow"
+                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="24"
+                CornerRadius="{Binding CornerRadius, ElementName=Panel}"
+                Background="{Binding Background, ElementName=Panel}"
+                Width="{Binding Width, ElementName=Panel}"
+                Height="{Binding Height, ElementName=Panel}"
+                Opacity="{Binding Opacity, ElementName=Panel}"
+                Visibility="{Binding Visibility, ElementName=Panel}"
+                Panel.ZIndex="0">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.4" Color="#50000000"/>
+            </Border.Effect>
+        </Border>
+
         <!-- 展开态：应用面板（初始隐藏），浅灰半透明；左上角锚定，从折叠图标处向右下生长 -->
         <Border x:Name="Panel" Visibility="Collapsed" Opacity="0"
                 VerticalAlignment="Top" HorizontalAlignment="Left" Margin="24"
                 CornerRadius="16"
                 Background="#CC000000"
                 AllowDrop="True"
-                DragEnter="FolderChip_DragEnter" Drop="FolderChip_Drop"
+                DragEnter="FolderChip_DragEnter" DragOver="FolderChip_DragEnter" Drop="FolderChip_Drop"
                 MouseDown="Panel_MouseDown"
                 MouseMove="FolderChip_MouseMove"
                 MouseUp="Panel_MouseUp"
                 ContextMenu="{StaticResource FolderMenu}">
-            <Border.Effect>
-                <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.4" Color="#50000000"/>
-            </Border.Effect>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="34"/>   <!-- 顶部栏：拖动 + 关闭按钮 +（置顶/居中时）标题 -->
@@ -115,13 +129,14 @@
                             Click="CollapseButton_Click" ToolTip="收起"/>
                 </Grid>
 
-                <!-- 可滚动的图标 + 插件混合网格 -->
+                <!-- 可滚动的图标 + 插件混合网格（ClipToBounds=False：悬停放大时图标可完整溢出显示，不被硬裁切） -->
                 <ScrollViewer Grid.Row="1" x:Name="IconScroller"
                               VerticalScrollBarVisibility="Visible"
                               HorizontalScrollBarVisibility="Disabled"
                               PanningMode="VerticalOnly"
                               Margin="8,0,8,10"
                               AllowDrop="True"
+                              ClipToBounds="False"
                               DragOver="IconGrid_DragOver"
                               Drop="IconGrid_Drop">
                     <ScrollViewer.Resources>

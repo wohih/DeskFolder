@@ -159,6 +159,7 @@ public partial class FolderWindow : Window
     private long _iconScrollStartTicks;
     private bool _iconScrollHorizontal;       // true=横向轴 / false=纵向轴
     private const int IconScrollAnimMs = 320; // 滚轮平滑滚动时长
+    private bool _scrollHorizontal;           // 当前展开网格滚动方向（供边缘淡出遮罩判定轴向）
 
     // 隐藏软件名称模式的悬停名称标签：MouseEnter 后延迟 ~700ms 在图标上方浮出（窗口级 OverlayLayer，
     // 在格子之外，不受 Dock 缩放影响）；MouseLeave/点击/拖拽开始立即取消并隐藏；同一时间只有一个。
@@ -236,7 +237,11 @@ public partial class FolderWindow : Window
 
         // 横向滚动模式：把鼠标滚轮映射为横向滚动（无横向滚轮的普通鼠标也能滚动），纵向模式放行默认竖向滚动
         if (IconScroller != null)
+        {
             IconScroller.PreviewMouseWheel += IconScroller_PreviewMouseWheel;
+            // 可滚动范围随展开动画/面板尺寸/内容变化而改变，实时刷新边缘淡入淡出遮罩
+            IconScroller.ScrollChanged += (_, _) => UpdateScrollFade();
+        }
 
         Loaded += OnLoaded;
         Closed += (_, _) => { StopGifTimers(); CleanupMusicService(); }; // 关闭时释放 GIF 计时器并退订共享音乐服务，避免泄漏
@@ -455,6 +460,7 @@ public partial class FolderWindow : Window
         int viewCols = Math.Max(1, EffectiveCols);   // 视口列数（排列设定）
         int viewRows = Math.Max(1, EffectiveRows);   // 视口行数（排列设定）
         bool horizontal = EffectiveScroll == 1;      // true=横向滚动, false=纵向滚动
+        _scrollHorizontal = horizontal;
 
         // 收集所有插件（展开态显示的）
         var expandedPlugins = _config.Plugins?
@@ -579,9 +585,8 @@ public partial class FolderWindow : Window
             var cell = BuildCell(item);
             Grid.SetRow(cell, row);
             Grid.SetColumn(cell, col);
-            // 边缘行放大向内生长，避免被 ScrollViewer 裁切：单行向上、顶排向下、底排向上，中间保持中心
-            if (totalRows <= 1) cell.RenderTransformOrigin = new WpfPoint(0.5, 1);
-            else if (row == 0) cell.RenderTransformOrigin = new WpfPoint(0.5, 0);
+            // 边缘行放大向内生长，避免被 ScrollViewer 裁切：单行/顶排向下、底排向上、中间保持中心
+            if (totalRows <= 1 || row == 0) cell.RenderTransformOrigin = new WpfPoint(0.5, 0);
             else if (row == totalRows - 1) cell.RenderTransformOrigin = new WpfPoint(0.5, 1);
             IconGrid.Children.Add(cell);
         }
@@ -589,28 +594,15 @@ public partial class FolderWindow : Window
         // 滚动方向：只启用选定轴向，关闭另一轴（横向：底部横向条；纵向：右侧纵向条）
         if (IconScroller != null)
         {
-            bool overflow = horizontal ? totalCols > viewCols : totalRows > viewRows;
-            // 滚动"淡出淡入"：仅在溢出时给滚动容器加边缘渐隐遮罩，图标进出视口时平滑淡入淡出（OpacityMask 取 alpha）
-            if (overflow)
-            {
-                var mask = new LinearGradientBrush
-                {
-                    StartPoint = horizontal ? new WpfPoint(0, 0) : new WpfPoint(0, 0),
-                    EndPoint = horizontal ? new WpfPoint(1, 0) : new WpfPoint(0, 1),
-                    GradientStops = new GradientStopCollection
-                    {
-                        new GradientStop(Color.FromArgb(0x00, 0, 0, 0), 0.0),
-                        new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.10),
-                        new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.90),
-                        new GradientStop(Color.FromArgb(0x00, 0, 0, 0), 1.0)
-                    }
-                };
-                IconScroller.OpacityMask = mask;
-            }
-            else
-            {
-                IconScroller.OpacityMask = null;
-            }
+            // 边缘"虚化"：以「ScrollViewer 实际可滚动量」为准，而非「设定行列」——
+            // 因为 RecomputeTargets 会把面板按工作区夹紧，靠近屏幕边缘的文件夹真实可视行/列少于设定值，
+            // 此时实际可滚动但按设定行列判定为不溢出会漏掉淡入淡出。用 OpacityMask 让边缘图标淡出成透明
+            // （真正的虚化，非黑色遮罩带）；阴影已移至并列的 PanelShadow，故 OpacityMask 可正常生效。
+            // BuildGrid 时布局尚未计算（ScrollableHeight 仍为 0），故布局完成后再复核一次。
+            UpdateScrollFade();
+            IconScroller.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Loaded,
+                new Action(UpdateScrollFade));
 
             if (horizontal)
             {
@@ -625,6 +617,33 @@ public partial class FolderWindow : Window
                 IconScroller.PanningMode = PanningMode.VerticalOnly;
             }
         }
+    }
+
+    /// <summary>按 ScrollViewer 真实可滚动量，用 OpacityMask 让边缘图标淡出成透明（真正的"虚化"）：
+    /// 滚动时（ScrollableHeight/Width&gt;1）在对应轴向上加一段 alpha 渐变遮罩，图标经过边缘平滑淡出；
+    /// 不滚动则清除遮罩。遮罩固定在 ScrollViewer 视口坐标系，内容滚动时图标穿越遮罩边界自然淡入淡出。</summary>
+    private void UpdateScrollFade()
+    {
+        if (IconScroller == null) return;
+        bool scrollable = IconScroller.ScrollableHeight > 1.0 || IconScroller.ScrollableWidth > 1.0;
+        if (!scrollable) { IconScroller.OpacityMask = null; return; }
+
+        bool horizontal = _scrollHorizontal;
+        // alpha 渐变：边缘透明(0)→内部不透明(1)，仅边缘薄薄一段淡出，图标本体仍清晰
+        double edge = horizontal ? 0.07 : 0.12;
+        var mask = new LinearGradientBrush
+        {
+            StartPoint = horizontal ? new WpfPoint(0, 0) : new WpfPoint(0, 0),
+            EndPoint   = horizontal ? new WpfPoint(1, 0) : new WpfPoint(0, 1),
+            GradientStops = new GradientStopCollection
+            {
+                new GradientStop(Color.FromArgb(0,   0, 0, 0), 0.0),
+                new GradientStop(Color.FromArgb(255, 0, 0, 0), edge),
+                new GradientStop(Color.FromArgb(255, 0, 0, 0), 1.0 - edge),
+                new GradientStop(Color.FromArgb(0,   0, 0, 0), 1.0)
+            }
+        };
+        IconScroller.OpacityMask = mask;
     }
 
     /// <summary>在指定滚动方向上为网格扩展一行/一列，并同步占位矩阵与 IconGrid 的行列定义。</summary>
@@ -1567,18 +1586,33 @@ public partial class FolderWindow : Window
 
     // 注：拖动已由 FolderChip_MouseLeftButtonDown 中的 this.DragMove() 处理，不再挂任何 WndProc 钩子。
 
-    // 拖放 .lnk 到文件夹图标上 → 加入文件夹
+    // 拖放 .lnk/文件 到文件夹图标上 → 加入文件夹；拖放其他文件夹的插件 → 移动。
+    // 同时作为 DragEnter 与 DragOver 处理器：DragOver 必须持续返回正确 Effects，
+    // 否则事件会冒泡到 Window_DragOver（对非 DeskFolderPlugin 数据置 None），
+    // 导致拖动桌面快捷方式到文件夹时出现"禁止放置"光标（f4d980d 引入的回归）。
     private void FolderChip_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)
-            ? System.Windows.DragDropEffects.Copy
-            : System.Windows.DragDropEffects.None;
+        if (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+            e.Effects = System.Windows.DragDropEffects.Copy;
+        else if (e.Data.GetDataPresent("DeskFolderPlugin"))
+            e.Effects = System.Windows.DragDropEffects.Move;
+        else
+            e.Effects = System.Windows.DragDropEffects.None;
         e.Handled = true;
     }
 
     private void FolderChip_Drop(object sender, System.Windows.DragEventArgs e)
     {
-        if (e.Data.GetData(System.Windows.DataFormats.FileDrop) is not string[] files) return;
+        if (e.Data.GetData(System.Windows.DataFormats.FileDrop) is string[] files
+            && TryAddShortcutFiles(files))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>把拖入的文件（仅 .lnk 快捷方式）加入当前文件夹；有新增则返回 true 并已保存+刷新。</summary>
+    private bool TryAddShortcutFiles(string[] files)
+    {
         bool added = false;
         foreach (var f in files)
         {
@@ -1594,6 +1628,7 @@ public partial class FolderWindow : Window
             S.Save();
             LoadItems();
         }
+        return added;
     }
 
     private void CollapseButton_Click(object sender, RoutedEventArgs e)
@@ -2491,9 +2526,17 @@ public partial class FolderWindow : Window
 
     // ===== 网格拖拽事件处理 =====
 
-    /// <summary>拖拽经过网格：计算目标位置并显示放置指示</summary>
+    /// <summary>拖拽经过网格：桌面文件(.lnk)拖入 → 复制加入文件夹；内部图标/插件拖拽 → 移动并显示放置指示</summary>
     private void IconGrid_DragOver(object sender, System.Windows.DragEventArgs e)
     {
+        // 桌面文件拖入：显示复制光标，不画内部放置指示
+        if (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+        {
+            e.Effects = System.Windows.DragDropEffects.Copy;
+            e.Handled = true;
+            return;
+        }
+
         e.Effects = System.Windows.DragDropEffects.Move;
         e.Handled = true;
 
@@ -2517,6 +2560,18 @@ public partial class FolderWindow : Window
     /// <summary>放置到网格：直接从鼠标位置计算目标格子，支持移动到空位或交换</summary>
     private void IconGrid_Drop(object sender, System.Windows.DragEventArgs e)
     {
+        // 桌面文件拖入网格 → 加入文件夹（与折叠态一致）
+        if (e.Data.GetData(System.Windows.DataFormats.FileDrop) is string[] files)
+        {
+            TryAddShortcutFiles(files);
+            RemoveDropIndicator();
+            _dragOverRow = -1;
+            _dragOverCol = -1;
+            _gridItemDragging = false;
+            e.Handled = true;
+            return;
+        }
+
         var dragId = e.Data.GetData("DragId") as string;
         var dragType = e.Data.GetData("DragType") as string;
 
