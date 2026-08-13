@@ -332,6 +332,7 @@ public partial class ThemeEditorWindow : Window
         HideCollapsedCheck.IsChecked = _theme.HideTextCollapsed;
         HideExpandedCheck.IsChecked = _theme.HideTextExpanded;
         HideShortcutNamesCheck.IsChecked = _theme.HideShortcutNames;
+        HideIconCollapsedCheck.IsChecked = _theme.HideIconCollapsed;
 
         // 实时联动（拖动即生效）
         TextSizeSlider.ValueChanged += (_, _) =>
@@ -484,6 +485,13 @@ public partial class ThemeEditorWindow : Window
     private void HideShortcutNames_Changed(object sender, RoutedEventArgs e)
     {
         _theme.HideShortcutNames = HideShortcutNamesCheck.IsChecked == true;
+        RefreshVisuals();
+        Commit();
+    }
+
+    private void HideIconCollapsed_Changed(object sender, RoutedEventArgs e)
+    {
+        _theme.HideIconCollapsed = HideIconCollapsedCheck.IsChecked == true;
         RefreshVisuals();
         Commit();
     }

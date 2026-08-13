@@ -277,6 +277,8 @@
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
+                            <CheckBox x:Name="HideIconCollapsedCheck" Content="折叠态隐藏图标（仅显示图片背景）" Margin="0,10,0,0"
+                                      Checked="HideIconCollapsed_Changed" Unchecked="HideIconCollapsed_Changed"/>
                         </StackPanel>
                     </Border>
 

@@ -187,6 +187,8 @@ public partial class FolderWindow : Window
     private int EffectiveCols => _config.FolderColumns ?? S.Data.Columns;
     /// <summary>有效行数：每文件夹覆盖优先，否则跟随全局设置</summary>
     private int EffectiveRows => _config.FolderRows ?? S.Data.Rows;
+    /// <summary>有效滚动方向：每文件夹覆盖优先，否则跟随全局设置（0=纵向滚动 / 1=横向滚动）</summary>
+    private int EffectiveScroll => _config.FolderExpandScroll ?? S.Data.ExpandScroll;
     /// <summary>折叠图标有效像素尺寸：拖动产生的自由像素值优先，否则用默认像素尺寸。</summary>
     private (double W, double H) EffectiveFoldSize()
     {
@@ -222,6 +224,10 @@ public partial class FolderWindow : Window
         // Dock 放大：在展开态 IconGrid 上跟踪鼠标（事件由格子向上冒泡到 IconGrid）
         IconGrid.MouseMove += IconGrid_MagnifyMouseMove;
         IconGrid.MouseLeave += IconGrid_MagnifyMouseLeave;
+
+        // 横向滚动模式：把鼠标滚轮映射为横向滚动（无横向滚轮的普通鼠标也能滚动），纵向模式放行默认竖向滚动
+        if (IconScroller != null)
+            IconScroller.PreviewMouseWheel += IconScroller_PreviewMouseWheel;
 
         Loaded += OnLoaded;
         Closed += (_, _) => { StopGifTimers(); CleanupMusicService(); }; // 关闭时释放 GIF 计时器并退订共享音乐服务，避免泄漏
@@ -395,6 +401,12 @@ public partial class FolderWindow : Window
         PreviewGrid.Children.Clear();
         PreviewGrid.RowDefinitions.Clear();
         PreviewGrid.ColumnDefinitions.Clear();
+
+        // 折叠态隐藏图标（图片主题常用）：仅显示背景/图片，不显示内部应用缩略图；展开态不受影响
+        var theme = S.GetThemeForFolder(_config.FolderThemeId);
+        PreviewGrid.Visibility = theme.HideIconCollapsed ? Visibility.Collapsed : Visibility.Visible;
+        if (theme.HideIconCollapsed) return;
+
         int rows = Math.Max(1, S.Data.PreviewRows);
         int cols = Math.Max(1, S.Data.PreviewCols);
         for (int i = 0; i < rows; i++)
@@ -422,48 +434,62 @@ public partial class FolderWindow : Window
     }
 
     /// <summary>展开面板中的图标+插件混合网格</summary>
+    /// <summary>展开面板中的图标+插件混合网格。视口严格为「设定行列」；图标超出行列时按滚动方向溢出：
+    /// 纵向滚动=固定列数、行向下增长（垂直滚动条）；横向滚动=固定行数、列向右增长（水平滚动条）。</summary>
     private void BuildGrid()
     {
         // 重建网格：清空 Dock 放大登记（旧格子的 ScaleTransform 一并失效）并隐藏可能残留的名称浮层
         _magnifyCells.Clear();
         HideHoverNameLabel();
 
-        int cols = Math.Max(1, EffectiveCols);
-        int rows = Math.Max(EffectiveRows, 5); // 至少5行以容纳插件
+        int viewCols = Math.Max(1, EffectiveCols);   // 视口列数（排列设定）
+        int viewRows = Math.Max(1, EffectiveRows);   // 视口行数（排列设定）
+        bool horizontal = EffectiveScroll == 1;      // true=横向滚动, false=纵向滚动
 
         // 收集所有插件（展开态显示的）
         var expandedPlugins = _config.Plugins?
             .Where(p => p.ShowOnExpanded && p.Type != FolderPluginType.None)
             .ToList() ?? new List<FolderPlugin>();
 
-        // 计算所需的行数（考虑所有插件和图标的位置）
-        int requiredRows = EffectiveRows;
+        // 插件所需的最大行列（含跨度），用于保证插件不被裁切
+        int pluginMaxRow = 0, pluginMaxCol = 0;
         foreach (var p in expandedPlugins)
         {
-            int neededRow = (p.GridRow >= 0 ? p.GridRow : 0) + p.GridRowSpan;
-            requiredRows = Math.Max(requiredRows, neededRow);
+            int er = (p.GridRow >= 0 ? p.GridRow : 0) + p.GridRowSpan;
+            int ec = (p.GridColumn >= 0 ? p.GridColumn : 0) + p.GridColSpan;
+            pluginMaxRow = Math.Max(pluginMaxRow, er);
+            pluginMaxCol = Math.Max(pluginMaxCol, ec);
         }
-        if (_config.ShortcutPositions != null)
-            foreach (var cell in _config.ShortcutPositions.Values)
-            {
-                int neededRow = (cell / cols) + 1;
-                requiredRows = Math.Max(requiredRows, neededRow);
-            }
-        rows = Math.Max(rows, requiredRows);
-        rows = Math.Max(rows, 5);
+
+        // 计算网格总尺寸：非滚动维度至少容纳插件；滚动维度随图标数量增长（溢出由滚动条显示）
+        int totalCols, totalRows;
+        if (horizontal)
+        {
+            totalRows = Math.Max(viewRows, pluginMaxRow);                 // 行固定视口，插件越界则扩展
+            int iconCols = (int)Math.Ceiling(_items.Count / (double)Math.Max(1, totalRows));
+            totalCols = Math.Max(viewCols, Math.Max(iconCols, pluginMaxCol));
+        }
+        else
+        {
+            totalCols = Math.Max(viewCols, pluginMaxCol);                 // 列固定视口，插件越界则扩展
+            int iconRows = (int)Math.Ceiling(_items.Count / (double)totalCols);
+            totalRows = Math.Max(viewRows, Math.Max(iconRows, pluginMaxRow));
+        }
+        totalRows = Math.Max(totalRows, 1);
+        totalCols = Math.Max(totalCols, 1);
 
         // 设置行列定义
         IconGrid.RowDefinitions.Clear();
         IconGrid.ColumnDefinitions.Clear();
-        for (int i = 0; i < rows; i++)
+        for (int i = 0; i < totalRows; i++)
             IconGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(IconCell) });
-        for (int i = 0; i < cols; i++)
+        for (int i = 0; i < totalCols; i++)
             IconGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(IconCell) });
 
         IconGrid.Children.Clear();
 
         // 构建占位矩阵（true=已占用）
-        var occupied = new bool[rows, cols];
+        var occupied = new bool[totalRows, totalCols];
 
         // 先放置插件到预设位置（插件可能占据更大空间，优先分配）
         foreach (var plugin in expandedPlugins)
@@ -474,23 +500,15 @@ public partial class FolderWindow : Window
             int pColSpan = plugin.GridColSpan;
 
             // 如果位置无效或已占用，寻找新位置
-            if (pRow < 0 || pCol < 0 || pRow + pRowSpan > rows || pCol + pColSpan > cols
+            if (pRow < 0 || pCol < 0 || pRow + pRowSpan > totalRows || pCol + pColSpan > totalCols
                 || IsAreaOccupied(occupied, Math.Max(0, pRow), Math.Max(0, pCol), pRowSpan, pColSpan))
             {
-                var pos = FindFreePosition(occupied, rows, cols, pRowSpan, pColSpan);
+                var pos = FindFreePosition(occupied, totalRows, totalCols, pRowSpan, pColSpan);
                 if (pos.row < 0)
                 {
-                    // 找不到位置，扩展行
-                    while (true)
-                    {
-                        IconGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(IconCell) });
-                        rows++;
-                        var newOccupied = new bool[rows, cols];
-                        Array.Copy(occupied, newOccupied, occupied.Length);
-                        occupied = newOccupied;
-                        pos = FindFreePosition(occupied, rows, cols, pRowSpan, pColSpan);
-                        if (pos.row >= 0) break;
-                    }
+                    // 仍放不下则沿滚动方向扩展网格（极少见）
+                    GrowGrid(ref totalRows, ref totalCols, horizontal, ref occupied);
+                    pos = FindFreePosition(occupied, totalRows, totalCols, pRowSpan, pColSpan);
                 }
                 pRow = pos.row;
                 pCol = pos.col;
@@ -510,58 +528,35 @@ public partial class FolderWindow : Window
             IconGrid.Children.Add(pluginElement);
         }
 
+        // 位置编码所用的列数：横向滚动时网格列数=totalCols（与存储/读取保持一致，避免索引冲突）；纵向=viewCols
+        int posDiv = horizontal ? totalCols : viewCols;
+
         // 放置快捷方式图标（1x1占位）
         foreach (var item in _items)
         {
             // 查找预设位置
             int targetCell = -1;
             if (_config.ShortcutPositions != null && _config.ShortcutPositions.ContainsKey(item.LinkPath))
-            {
                 targetCell = _config.ShortcutPositions[item.LinkPath];
-            }
 
             int row, col;
             if (targetCell >= 0)
             {
-                row = targetCell / cols;
-                col = targetCell % cols;
-                // 如果预设位置无效或已被插件占用，寻找新位置
-                if (row >= rows || col >= cols || occupied[row, col])
+                row = targetCell / posDiv;
+                col = targetCell % posDiv;
+                // 如果预设位置无效或已被占用，寻找新位置
+                if (row >= totalRows || col >= totalCols || occupied[row, col])
                 {
-                    var pos = FindFreePosition(occupied, rows, cols, 1, 1);
-                    if (pos.row < 0)
-                    {
-                        while (true)
-                        {
-                            IconGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(IconCell) });
-                            rows++;
-                            var newOccupied = new bool[rows, cols];
-                            Array.Copy(occupied, newOccupied, occupied.Length);
-                            occupied = newOccupied;
-                            pos = FindFreePosition(occupied, rows, cols, 1, 1);
-                            if (pos.row >= 0) break;
-                        }
-                    }
+                    var pos = FindFreePosition(occupied, totalRows, totalCols, 1, 1);
+                    if (pos.row < 0) { GrowGrid(ref totalRows, ref totalCols, horizontal, ref occupied); pos = FindFreePosition(occupied, totalRows, totalCols, 1, 1); }
                     row = pos.row;
                     col = pos.col;
                 }
             }
             else
             {
-                var pos = FindFreePosition(occupied, rows, cols, 1, 1);
-                if (pos.row < 0)
-                {
-                    while (true)
-                    {
-                        IconGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(IconCell) });
-                        rows++;
-                        var newOccupied = new bool[rows, cols];
-                        Array.Copy(occupied, newOccupied, occupied.Length);
-                        occupied = newOccupied;
-                        pos = FindFreePosition(occupied, rows, cols, 1, 1);
-                        if (pos.row >= 0) break;
-                    }
-                }
+                var pos = FindFreePosition(occupied, totalRows, totalCols, 1, 1);
+                if (pos.row < 0) { GrowGrid(ref totalRows, ref totalCols, horizontal, ref occupied); pos = FindFreePosition(occupied, totalRows, totalCols, 1, 1); }
                 row = pos.row;
                 col = pos.col;
             }
@@ -569,12 +564,81 @@ public partial class FolderWindow : Window
             // 确保字典不为 null
             if (_config.ShortcutPositions == null) _config.ShortcutPositions = new();
             occupied[row, col] = true;
-            _config.ShortcutPositions[item.LinkPath] = row * cols + col;
+            _config.ShortcutPositions[item.LinkPath] = row * posDiv + col;
 
             var cell = BuildCell(item);
             Grid.SetRow(cell, row);
             Grid.SetColumn(cell, col);
+            // 边缘行放大向内生长，避免被 ScrollViewer 裁切：单行向上、顶排向下、底排向上，中间保持中心
+            if (totalRows <= 1) cell.RenderTransformOrigin = new WpfPoint(0.5, 1);
+            else if (row == 0) cell.RenderTransformOrigin = new WpfPoint(0.5, 0);
+            else if (row == totalRows - 1) cell.RenderTransformOrigin = new WpfPoint(0.5, 1);
             IconGrid.Children.Add(cell);
+        }
+
+        // 滚动方向：只启用选定轴向，关闭另一轴（横向：底部横向条；纵向：右侧纵向条）
+        if (IconScroller != null)
+        {
+            bool overflow = horizontal ? totalCols > viewCols : totalRows > viewRows;
+            // 滚动"淡出淡入"：仅在溢出时给滚动容器加边缘渐隐遮罩，图标进出视口时平滑淡入淡出（OpacityMask 取 alpha）
+            if (overflow)
+            {
+                var mask = new LinearGradientBrush
+                {
+                    StartPoint = horizontal ? new WpfPoint(0, 0) : new WpfPoint(0, 0),
+                    EndPoint = horizontal ? new WpfPoint(1, 0) : new WpfPoint(0, 1),
+                    GradientStops = new GradientStopCollection
+                    {
+                        new GradientStop(Color.FromArgb(0x00, 0, 0, 0), 0.0),
+                        new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.10),
+                        new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.90),
+                        new GradientStop(Color.FromArgb(0x00, 0, 0, 0), 1.0)
+                    }
+                };
+                IconScroller.OpacityMask = mask;
+            }
+            else
+            {
+                IconScroller.OpacityMask = null;
+            }
+
+            if (horizontal)
+            {
+                IconScroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+                IconScroller.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+                IconScroller.PanningMode = PanningMode.HorizontalOnly;
+            }
+            else
+            {
+                IconScroller.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+                IconScroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+                IconScroller.PanningMode = PanningMode.VerticalOnly;
+            }
+        }
+    }
+
+    /// <summary>在指定滚动方向上为网格扩展一行/一列，并同步占位矩阵与 IconGrid 的行列定义。</summary>
+    private void GrowGrid(ref int totalRows, ref int totalCols, bool horizontal, ref bool[,] occupied)
+    {
+        if (horizontal)
+        {
+            totalCols++;
+            var ns = new bool[totalRows, totalCols];
+            for (int r = 0; r < totalRows; r++)
+                for (int c = 0; c < totalCols - 1; c++)
+                    ns[r, c] = occupied[r, c];
+            occupied = ns;
+            IconGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(IconCell) });
+        }
+        else
+        {
+            totalRows++;
+            var ns = new bool[totalRows, totalCols];
+            for (int r = 0; r < totalRows - 1; r++)
+                for (int c = 0; c < totalCols; c++)
+                    ns[r, c] = occupied[r, c];
+            occupied = ns;
+            IconGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(IconCell) });
         }
     }
 
@@ -842,45 +906,26 @@ public partial class FolderWindow : Window
     private double AnimWindowW() => Math.Max(_panelTargetW, CollapsedW) + WIN_PAD * 2;
     private double AnimWindowH() => Math.Max(_panelTargetH, CollapsedH) + WIN_PAD * 2;
 
-    /// <summary>按当前图标+插件数量计算展开后面板的最终尺寸，并夹取到工作区剩余空间（不足则滚动）。</summary>
+    /// <summary>按展开排列设置（行×列）计算展开后面板的最终尺寸：面板严格贴合「设定行列」，
+    /// 图标超出行列的部分由 ScrollViewer 滚动显示（纵向滚动→行向下增长，横向滚动→列向右增长）。
+    /// 锚点始终是折叠图标左上角，仅受工作区右/下剩余空间约束（空间不足时夹紧，滚动条兜底）。</summary>
     private void RecomputeTargets()
     {
-        var d = S.Data;
         var wa = SystemParameters.WorkArea;
-        double cellW = IconCell, cellH = IconCell;
         int cols = Math.Max(1, EffectiveCols);
+        int rows = Math.Max(1, EffectiveRows);
 
-        // 计算图标所需行数
-        int iconCount = _items.Count;
-        int iconRows = (int)Math.Ceiling(iconCount / (double)cols);
-
-        // 计算插件占用的最大行（考虑插件的位置和跨度）
-        int pluginMaxRow = 0;
-        if (_config.Plugins != null)
-        {
-            foreach (var p in _config.Plugins.Where(pl => pl.ShowOnExpanded && pl.Type != FolderPluginType.None))
-            {
-                int pluginEndRow = p.GridRow >= 0 ? p.GridRow + p.GridRowSpan : 0;
-                pluginMaxRow = Math.Max(pluginMaxRow, pluginEndRow);
-            }
-        }
-
-        // 行数= max(设置的最小行数, 图标行数, 插件最大行, 1)
-        int rows = Math.Max(EffectiveRows, iconRows);
-        rows = Math.Max(rows, pluginMaxRow);
-        rows = Math.Max(rows, 5); // 至少5行以容纳插件
-        rows = Math.Max(1, rows);
-
-        double contentW = cols * cellW;
-        double contentH = rows * cellH;
+        // 面板尺寸严格等于「设定行列」对应的像素（不再被图标数量撑大，实现"刚好符合排列设置"）
+        double contentW = cols * IconCell;
+        double contentH = rows * IconCell;
         double pw = contentW + PanelPaddingH;
         double ph = contentH + HeaderHeight + PanelPaddingV;
 
-        // 锚点始终是折叠图标左上角（窗口不动），故只受右/下剩余空间约束；空间不足由 ScrollViewer 兜底
+        // 仅受工作区右/下剩余空间约束（不足则夹紧，由 ScrollViewer 兜底显示溢出图标）
         double maxPW = (wa.Right - (_collapsedLeft - WIN_PAD)) - WIN_PAD * 2;
         double maxPH = (wa.Bottom - (_collapsedTop - WIN_PAD)) - WIN_PAD * 2;
-        _panelTargetW = Math.Min(pw, Math.Max(CollapsedW, maxPW));
-        _panelTargetH = Math.Min(ph, Math.Max(CollapsedH, maxPH));
+        _panelTargetW = Math.Min(pw, maxPW);
+        _panelTargetH = Math.Min(ph, maxPH);
     }
 
     private void Expand()
@@ -1268,6 +1313,16 @@ public partial class FolderWindow : Window
         _magnifyMouseInside = false;
         ResetMagnifyTargets();
         EnsureMagnifyRunning();
+    }
+
+    /// <summary>横向滚动模式下，将鼠标滚轮（竖向 delta）映射为横向滚动偏移，使普通鼠标也能横向滚动；
+    /// 纵向模式不过拦截，保持 WPF 默认竖向滚动。</summary>
+    private void IconScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (EffectiveScroll != 1 || IconScroller == null) return; // 仅横向模式拦截
+        // 向上滚（delta>0）内容向左移，露出右侧；向下滚反之。ScrollToHorizontalOffset 会自动夹紧到合法范围
+        IconScroller.ScrollToHorizontalOffset(IconScroller.HorizontalOffset - e.Delta);
+        e.Handled = true;
     }
 
     /// <summary>网格项拖拽开始：取消名称浮层，Dock 放大目标全部归零（拖拽进行中暂停放大）。</summary>

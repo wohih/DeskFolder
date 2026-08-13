@@ -203,9 +203,12 @@ public class ThemeConfig
     public bool HideTextExpanded { get; set; } = false;
     /// <summary>文字是否加粗</summary>
     public bool TextBold { get; set; } = false;
-    /// <summary>展开态是否隐藏快捷方式名称（图标适当放大，悬停约 700ms 后在图标上方浮出名称标签）；
-    /// 默认 false，旧配置反序列化时自动取默认值（兼容）。</summary>
-    public bool HideShortcutNames { get; set; } = false;
+        /// <summary>展开态是否隐藏快捷方式名称（图标适当放大，悬停约 700ms 后在图标上方浮出名称标签）；
+        /// 默认 false，旧配置反序列化时自动取默认值（兼容）。</summary>
+        public bool HideShortcutNames { get; set; } = false;
+        /// <summary>折叠态是否隐藏快捷方式图标（预览缩略图）；展开态始终显示图标。
+        /// 用于图片主题：让折叠态只显示图片背景、不显示内部应用缩略图。默认 false。</summary>
+        public bool HideIconCollapsed { get; set; } = false;
 
     /// <summary>列表用预览画刷（按模式合成）；不参与序列化</summary>
     [JsonIgnore]
@@ -341,8 +344,10 @@ public class FolderConfig
     public double Y { get; set; } = double.NaN;
     /// <summary>每文件夹列数覆盖；null = 跟随全局 Columns</summary>
     public int? FolderColumns { get; set; } = null;
-    /// <summary>每文件夹行数覆盖；null = 跟随全局 Rows</summary>
-    public int? FolderRows { get; set; } = null;
+        /// <summary>每文件夹行数覆盖；null = 跟随全局 Rows</summary>
+        public int? FolderRows { get; set; } = null;
+        /// <summary>展开面板滚动方向覆盖；null = 跟随全局 ExpandScroll（0=纵向 / 1=横向）。</summary>
+        public int? FolderExpandScroll { get; set; } = null;
     /// <summary>每文件夹折叠图标自由像素宽（拖动缩放写入）；null = 跟随默认折叠尺寸</summary>
     public double? FolderFoldW { get; set; } = null;
     /// <summary>每文件夹折叠图标自由像素高（拖动缩放写入）；null = 跟随默认折叠尺寸</summary>
@@ -398,8 +403,10 @@ public class AppSettingsData
 {
     /// <summary>展开时每行图标数（列）</summary>
     public int Columns { get; set; } = 4;
-    /// <summary>展开时每列图标数（行，超出可滚动）</summary>
-    public int Rows { get; set; } = 3;
+        /// <summary>展开时每列图标数（行，超出可滚动）</summary>
+        public int Rows { get; set; } = 3;
+        /// <summary>展开面板图标溢出时的滚动方向：0=纵向滚动（固定列数、行向下增长），1=横向滚动（固定行数、列向右增长）。默认纵向。</summary>
+        public int ExpandScroll { get; set; } = 0;
     /// <summary>展开/收起动画时长（毫秒）</summary>
     public int AnimationMs { get; set; } = 220;
     /// <summary>鼠标移入多少毫秒后才展开（防抖）</summary>
@@ -474,12 +481,14 @@ public class SettingsService
         catch { svc.Data = new AppSettingsData(); }
         svc.Data.Columns = Math.Clamp(svc.Data.Columns, 1, 12);
         svc.Data.Rows = Math.Clamp(svc.Data.Rows, 1, 12);
+        svc.Data.ExpandScroll = Math.Clamp(svc.Data.ExpandScroll, 0, 1);
         svc.Data.PreviewRows = Math.Clamp(svc.Data.PreviewRows, 1, 6);
         svc.Data.PreviewCols = Math.Clamp(svc.Data.PreviewCols, 1, 6);
         foreach (var f in svc.Data.Folders)
         {
             if (f.FolderColumns.HasValue) f.FolderColumns = Math.Clamp(f.FolderColumns.Value, 1, 12);
             if (f.FolderRows.HasValue) f.FolderRows = Math.Clamp(f.FolderRows.Value, 1, 12);
+            if (f.FolderExpandScroll.HasValue) f.FolderExpandScroll = Math.Clamp(f.FolderExpandScroll.Value, 0, 1);
             if (f.FolderFoldW.HasValue) f.FolderFoldW = Math.Clamp(f.FolderFoldW.Value, 60, 800);
             if (f.FolderFoldH.HasValue) f.FolderFoldH = Math.Clamp(f.FolderFoldH.Value, 60, 800);
         }
