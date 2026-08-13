@@ -13,6 +13,8 @@ namespace DeskFolder.Views;
 /// 拖拽 / 缩放一个选框来选择要显示的图片区域，互不干扰。
 /// 渲染采用 Stretch=Fill：选框区域按各自容器比例精确铺满，不存在二次居中裁切，
 /// 因此本对话框的预览（CollPreview / ExpPreview）与桌面实际显示完全一致。
+/// 关键：选框宽高比锁定为对应面板（折叠=collW×collH / 展开=expW×expH）的比例，
+/// 因此裁剪后 Stretch=Fill 填充面板时不会发生拉伸变形。
 /// 返回折叠态裁剪 <see cref="CollapsedCrop"/> 与展开态裁剪 <see cref="ExpandedCrop"/>（null=显示整图）。
 /// </summary>
 public partial class ImageCropWindow : Window
@@ -50,13 +52,19 @@ public partial class ImageCropWindow : Window
     /// <summary>裁剪编辑范围：0=同时编辑折叠/展开两态，1=仅折叠态，2=仅展开态（另态保持原值不变）。</summary>
     private readonly int _editState;
 
+    /// <summary>比例来源：具体文件夹名（按该文件夹行列锁定）或 null（全局默认行列锁定）。
+    /// 用于向用户明示当前裁剪比例按谁的尺寸锁定，避免"全局主题裁剪"被误用到行列不同的文件夹。</summary>
+    private readonly string? _ratioSource;
+
     public ImageCropWindow(string imagePath, Rect? collCrop, Rect? expCrop,
-        double collW, double collH, double expW, double expH, int editState = 0)
+        double collW, double collH, double expW, double expH, int editState = 0,
+        string? ratioSource = null)
     {
         _path = imagePath;
         _collW = collW; _collH = collH; _expW = expW; _expH = expH;
         _collCrop = collCrop; _expCrop = expCrop;
         _editState = editState;
+        _ratioSource = ratioSource;
         _edit = editState == 2 ? 1 : 0; // 内部 _edit：0=折叠，1=展开
 
         try
@@ -95,22 +103,53 @@ public partial class ImageCropWindow : Window
             CollapsedRadio.IsEnabled = false;
         }
 
-        // 预览框尺寸：折叠态为正方形（150×150），展开态按真实比例
-        CollPreviewBox.Width = 100; CollPreviewBox.Height = 100;
+        // 预览框尺寸：按各自真实面板比例绘制（不再是硬编码正方形），所见即所得
+        double car = _collW / Math.Max(1, _collH);
+        double cph = 100; double cpw = cph * car;
+        if (cpw > 230) { cpw = 230; cph = 230 / car; }
+        CollPreviewBox.Width = cpw; CollPreviewBox.Height = cph;
         double ar = _expW / Math.Max(1, _expH);
         double ph = 100; double pw = ph * ar;
         if (pw > 230) { pw = 230; ph = 230 / ar; }
         ExpPreviewBox.Width = pw; ExpPreviewBox.Height = ph;
 
+        string srcLabel = string.IsNullOrWhiteSpace(_ratioSource)
+            ? "全局默认（与具体文件夹无关）"
+            : $"文件夹「{_ratioSource}」";
         InfoText.Text = $"折叠态尺寸：{collW:0}×{collH:0}　展开态尺寸：{expW:0}×{expH:0}" +
                         $"　原图：{_src.PixelWidth}×{_src.PixelHeight}（像素）。" +
-                        "切换上方单选可分别裁剪两种状态。";
+                        $"裁剪比例按 {srcLabel} 的面板尺寸锁定。";
+
+        // 全局主题裁剪：比例按全局默认行列锁定，可能与具体文件夹的实际展开比例不同，
+        // 给出明确提醒，引导用户在对应文件夹的「外观设置」中裁剪以精确匹配。
+        if (string.IsNullOrWhiteSpace(_ratioSource))
+        {
+            WarnText.Visibility = Visibility.Visible;
+            WarnText.Text = "⚠ 当前为「全局主题」裁剪：展开比例按全局默认行列锁定，" +
+                            "可能与你某个文件夹的实际展开比例不同。若需与特定文件夹精确匹配，" +
+                            "请在该文件夹右键 → 外观设置 → 右键主题 → 编辑主题 → 裁剪。";
+        }
 
         BuildScene();
         ComputeLayout();
         LoadActiveRect();
         ApplyModeColor();
         Redraw();
+
+        // 安全网：WPF 构造期内 RadioButton 的 Checked 事件可能延迟或重复触发，
+        // 导致 Mode_Collapsed/Mode_Expanded 在上述 LoadActiveRect 之后又重置了 _edit 和选框坐标。
+        // 在 Loaded 优先级（窗口布局完成后）重新应用一次，确保最终显示的比例始终正确。
+        Loaded += (s, e) =>
+        {
+            // 恢复 editState 对应的正确编辑态（防止被延迟事件翻转）
+            _edit = _editState == 2 ? 1 : 0;
+            if (_editState == 2) ExpandedRadio.IsChecked = true;
+            else if (_editState == 1) CollapsedRadio.IsChecked = true;
+            else CollapsedRadio.IsChecked = true; // editState=0（同时编辑）默认折叠态
+            LoadActiveRect();
+            ApplyModeColor();
+            Redraw();
+        };
     }
 
     private static double Clamp(double v, double lo, double hi) => v < lo ? lo : v > hi ? hi : v;
@@ -185,6 +224,39 @@ public partial class ImageCropWindow : Window
         var c = _edit == 0 ? _collCrop : _expCrop;
         if (c.HasValue) { _nx = c.Value.X; _ny = c.Value.Y; _nw = c.Value.Width; _nh = c.Value.Height; }
         else { _nx = 0; _ny = 0; _nw = 1; _nh = 1; }
+        // 始终按目标面板比例吸附选框：无论是否已有裁剪，选框从一开始即与当前编辑态的面板比例一致
+        SnapToAspect(ref _nx, ref _ny, ref _nw, ref _nh);
+    }
+
+    /// <summary>当前编辑态面板在归一化坐标系下的目标宽高比（nw/nh）。
+    /// 裁剪坐标按原图宽/高分别归一化，故需乘以 (srcH/srcW) 才能换算到与面板像素比一致。</summary>
+    private double ActiveAspectNorm()
+    {
+        double panelW = _edit == 0 ? _collW : _expW;
+        double panelH = _edit == 0 ? _collH : _expH;
+        if (panelW <= 0 || panelH <= 0) return 1;
+        if (_src.PixelWidth <= 0 || _src.PixelHeight <= 0) return 1;
+        // 注意：PixelHeight/PixelWidth 均为 int，必须转 double 再做除法，否则整数除法 (1190/1264)=0
+        // 会把整个比例算成 0，导致 SnapToAspect 退化成正方形比例（展开态明显变方、折叠态因本身近方形而"看似正常"）
+        double a = (panelW / panelH) * ((double)_src.PixelHeight / _src.PixelWidth);
+        return a > 0 ? a : 1;
+    }
+
+    /// <summary>把裁剪矩形吸附到目标比例：保持中心、在 [0,1] 内尽量保留面积，避免拉伸。</summary>
+    private void SnapToAspect(ref double nx, ref double ny, ref double nw, ref double nh)
+    {
+        double a = ActiveAspectNorm();
+        double w = nw, h = w / a;
+        if (h > 1) { h = 1; w = h * a; }
+        if (w > 1) { w = 1; h = w / a; }
+        w = Math.Max(MinFrac, w);
+        h = Math.Max(MinFrac, h);
+        if (w > 1) w = 1;
+        if (h > 1) h = 1;
+        double cx = nx + nw / 2, cy = ny + nh / 2;
+        nx = Clamp(cx - w / 2, 0, 1 - w);
+        ny = Clamp(cy - h / 2, 0, 1 - h);
+        nw = w; nh = h;
     }
 
     private void SetActiveCrop(Rect r)
@@ -200,8 +272,8 @@ public partial class ImageCropWindow : Window
         _cropBorder.Stroke = stroke;
         foreach (var h in new[] { _hTL, _hTR, _hBL, _hBR }) h.Stroke = stroke;
         ModeHint.Text = _edit == 0
-            ? "正在编辑：折叠态（150×150 正方形）"
-            : $"正在编辑：展开态（{_expW:0}×{_expH:0}）";
+            ? "正在编辑：折叠态（150×150 正方形，已锁定比例防拉伸）"
+            : $"正在编辑：展开态（{_expW:0}×{_expH:0}，已锁定比例防拉伸）";
     }
 
     /// <summary>把指定裁剪区域（归一化）从原图裁出，用于预览（null=整图）。</summary>
@@ -319,35 +391,48 @@ public partial class ImageCropWindow : Window
             _nx = Clamp(_startNx + dx, 0, 1 - _nw);
             _ny = Clamp(_startNy + dy, 0, 1 - _nh);
         }
-        else if (_mode == "br")
+        else if (_mode == "br" || _mode == "tl" || _mode == "tr" || _mode == "bl")
         {
-            _nw = Clamp(_startNw + dx, MinFrac, 1 - _nx);
-            _nh = Clamp(_startNh + dy, MinFrac, 1 - _ny);
-        }
-        else if (_mode == "tl")
-        {
-            double right = _startNx + _startNw, bottom = _startNy + _startNh;
-            _nw = Clamp(_startNw - dx, MinFrac, right);
-            _nx = right - _nw;
-            _nh = Clamp(_startNh - dy, MinFrac, bottom);
-            _ny = bottom - _nh;
-        }
-        else if (_mode == "tr")
-        {
-            double bottom = _startNy + _startNh;
-            _nw = Clamp(_startNw + dx, MinFrac, 1 - _startNx);
-            _nh = Clamp(_startNh - dy, MinFrac, bottom);
-            _ny = bottom - _nh;
-        }
-        else if (_mode == "bl")
-        {
-            double right = _startNx + _startNw;
-            _nw = Clamp(_startNw - dx, MinFrac, right);
-            _nx = right - _nw;
-            _nh = Clamp(_startNh + dy, MinFrac, 1 - _startNy);
+            // 锁定比例缩放：宽度/高度按目标面板比例联动，避免裁剪后填充拉伸
+            ResizeWithAspect(_mode, dx, dy);
         }
         SetActiveCrop(new Rect(_nx, _ny, _nw, _nh));
         Redraw();
+    }
+
+    /// <summary>按锁定比例缩放裁剪框（四角手柄通用）。以主导轴驱动宽，再按目标比例推导高，
+    /// 并在 [0,1] 与最小尺寸内夹紧；固定角（被拖动手柄的对侧）保持不动。</summary>
+    private void ResizeWithAspect(string mode, double dx, double dy)
+    {
+        double a = ActiveAspectNorm();
+
+        // 固定角（被拖动手柄的对侧顶点）
+        double fixedX, fixedY;
+        if (mode == "br") { fixedX = _startNx; fixedY = _startNy; }
+        else if (mode == "tl") { fixedX = _startNx + _startNw; fixedY = _startNy + _startNh; }
+        else if (mode == "tr") { fixedX = _startNx; fixedY = _startNy + _startNh; }
+        else /* bl */ { fixedX = _startNx + _startNw; fixedY = _startNy; }
+
+        // 取主导轴：横向位移直接驱动宽；纵向位移换算为宽（高×比例）后取绝对值较大者
+        double rightSide = (mode == "br" || mode == "tr") ? 1 : -1;   // +dx 是否使宽度增大
+        double bottomSide = (mode == "br" || mode == "bl") ? 1 : -1;  // +dy 是否使高度增大
+        double dxW = rightSide * dx;          // 横向位移折算的宽度增量
+        double dyW = bottomSide * dy * a;     // 纵向位移折算的宽度增量（高→宽）
+        double dW = Math.Abs(dxW) >= Math.Abs(dyW) ? dxW : dyW;
+
+        // 各手柄在 x / y 方向允许的最大宽/高（固定边到对侧边界的距离）
+        double maxNw = (mode == "tl" || mode == "bl") ? fixedX : 1 - fixedX;
+        double maxNh = (mode == "tl" || mode == "tr") ? fixedY : 1 - fixedY;
+
+        double nw = Clamp(_startNw + dW, MinFrac, maxNw);
+        double nh = nw / a;
+        if (nh > maxNh) { nh = maxNh; nw = nh * a; }
+        if (nh < MinFrac) { nh = MinFrac; nw = nh * a; nw = Clamp(nw, MinFrac, maxNw); }
+
+        double nx = (mode == "tl" || mode == "bl") ? fixedX - nw : fixedX;
+        double ny = (mode == "tr" || mode == "tl") ? fixedY - nh : fixedY;
+
+        _nw = nw; _nh = nh; _nx = nx; _ny = ny;
     }
 
     private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

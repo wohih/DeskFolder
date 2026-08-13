@@ -7,6 +7,8 @@
 
     <StackPanel Margin="16">
         <TextBlock x:Name="InfoText" FontSize="12" Foreground="#555" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <TextBlock x:Name="WarnText" FontSize="12" Foreground="#C0392B" TextWrapping="Wrap"
+                   Margin="0,0,0,8" Visibility="Collapsed"/>
 
         <!-- 图片视口（透明棋盘格底，便于观察非矩形/透明区域） -->
         <Border Width="540" Height="380" HorizontalAlignment="Center" BorderBrush="#CCC" BorderThickness="1">

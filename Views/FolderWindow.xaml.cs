@@ -151,6 +151,15 @@ public partial class FolderWindow : Window
     private bool _lyricsSnapNext;         // RebuildLyricsPanel 后置位：下次滚动直接落位
     private int _lastLyricIndex = -1;     // 上一个当前行索引（首次 -1→0 直接落位）
 
+    // 图标面板滚轮平滑滚动动画状态：与歌词/放大动画共用 OnRenderFrame 调度器（_iconScrollActive 门控，仿 _lyricsAnimActive 模式）。
+    // 横向模式下把竖向滚轮映射为横向偏移；纵向模式接管默认竖向滚动；两者均做 EaseOutCubic 缓动，避免逐格硬跳。
+    private bool _iconScrollActive;
+    private double _iconScrollFrom;
+    private double _iconScrollTo;
+    private long _iconScrollStartTicks;
+    private bool _iconScrollHorizontal;       // true=横向轴 / false=纵向轴
+    private const int IconScrollAnimMs = 320; // 滚轮平滑滚动时长
+
     // 隐藏软件名称模式的悬停名称标签：MouseEnter 后延迟 ~700ms 在图标上方浮出（窗口级 OverlayLayer，
     // 在格子之外，不受 Dock 缩放影响）；MouseLeave/点击/拖拽开始立即取消并隐藏；同一时间只有一个。
     private readonly DispatcherTimer _hoverNameTimer;  // 悬停延迟计时器
@@ -441,6 +450,7 @@ public partial class FolderWindow : Window
         // 重建网格：清空 Dock 放大登记（旧格子的 ScaleTransform 一并失效）并隐藏可能残留的名称浮层
         _magnifyCells.Clear();
         HideHoverNameLabel();
+        _iconScrollActive = false; // 网格重建期间取消在途滚轮平滑滚动，避免与新内容偏移打架
 
         int viewCols = Math.Max(1, EffectiveCols);   // 视口列数（排列设定）
         int viewRows = Math.Max(1, EffectiveRows);   // 视口行数（排列设定）
@@ -1060,7 +1070,8 @@ public partial class FolderWindow : Window
         OnLyricsAnimFrame();
         if (_magnifyActive)
             OnMagnifyFrame();
-        if (!_animating && !_lyricsAnimActive && !_magnifyActive)
+        OnIconScrollFrame();
+        if (!_animating && !_lyricsAnimActive && !_magnifyActive && !_iconScrollActive)
             CompositionTarget.Rendering -= OnRenderFrame;
     }
 
@@ -1225,6 +1236,52 @@ public partial class FolderWindow : Window
             _lyricsAnimActive = false;
     }
 
+    /// <summary>启动图标面板滚轮平滑滚动：从当前实际偏移缓动到目标偏移（EaseOutCubic，帧驱动）。
+    /// 动画在途时再来滚轮事件：从当前实际位置重定向到新目标，不跳变、不叠钩子（仿歌词滚动）。</summary>
+    private void StartIconScrollAnimation(double targetOffset, bool horizontal)
+    {
+        if (IconScroller == null) return;
+
+        _iconScrollHorizontal = horizontal;
+        // 从当前实际偏移起算（动画在途时为上一帧实际位置），保证重定向平滑无跳变
+        double from = horizontal ? IconScroller.HorizontalOffset : IconScroller.VerticalOffset;
+        _iconScrollFrom = from;
+        _iconScrollTo = targetOffset;
+
+        // 目标与当前位置基本一致：无需动画，直接落位
+        if (Math.Abs(_iconScrollTo - _iconScrollFrom) < 0.5)
+        {
+            _iconScrollActive = false;
+            if (horizontal) IconScroller.ScrollToHorizontalOffset(targetOffset);
+            else IconScroller.ScrollToVerticalOffset(targetOffset);
+            return;
+        }
+
+        _iconScrollStartTicks = Stopwatch.GetTimestamp();
+        _iconScrollActive = true;
+        // 与面板/歌词/放大动画共用 OnRenderFrame；先减后加避免重复订阅
+        CompositionTarget.Rendering -= OnRenderFrame;
+        CompositionTarget.Rendering += OnRenderFrame;
+    }
+
+    /// <summary>图标面板滚轮平滑滚动帧推进；结束或滚动控件已销毁即停止（退订由 OnRenderFrame 统一处理）。</summary>
+    private void OnIconScrollFrame()
+    {
+        if (!_iconScrollActive) return;
+        if (IconScroller == null) { _iconScrollActive = false; return; }
+
+        double elapsedMs = (Stopwatch.GetTimestamp() - _iconScrollStartTicks) / (double)Stopwatch.Frequency * 1000.0;
+        double p = Math.Min(1.0, elapsedMs / IconScrollAnimMs);
+        double k = EaseOutCubic(p);
+        double offset = _iconScrollFrom + (_iconScrollTo - _iconScrollFrom) * k;
+        if (_iconScrollHorizontal)
+            IconScroller.ScrollToHorizontalOffset(offset);
+        else
+            IconScroller.ScrollToVerticalOffset(offset);
+        if (p >= 1.0)
+            _iconScrollActive = false;
+    }
+
     // ---------------- 隐藏软件名称：悬停延迟名称浮层 ----------------
 
     /// <summary>隐藏名称模式：MouseEnter 后启动延迟计时，超时在图标上方浮出名称标签（同一时间只有一个）。</summary>
@@ -1315,13 +1372,15 @@ public partial class FolderWindow : Window
         EnsureMagnifyRunning();
     }
 
-    /// <summary>横向滚动模式下，将鼠标滚轮（竖向 delta）映射为横向滚动偏移，使普通鼠标也能横向滚动；
-    /// 纵向模式不过拦截，保持 WPF 默认竖向滚动。</summary>
+    /// <summary>鼠标滚轮平滑滚动：横向模式把竖向 delta 映射为横向偏移；纵向模式接管默认竖向滚动。
+    /// 两者均经 EaseOutCubic 缓动（StartIconScrollAnimation），不再逐格硬跳；ScrollTo*Offset 会自动夹紧到合法范围。</summary>
     private void IconScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (EffectiveScroll != 1 || IconScroller == null) return; // 仅横向模式拦截
-        // 向上滚（delta>0）内容向左移，露出右侧；向下滚反之。ScrollToHorizontalOffset 会自动夹紧到合法范围
-        IconScroller.ScrollToHorizontalOffset(IconScroller.HorizontalOffset - e.Delta);
+        if (IconScroller == null) return;
+        bool horizontal = EffectiveScroll == 1;
+        // 向上滚（delta>0）→ 偏移减小：横向=内容左移露出右侧，纵向=内容上移露出上方；与 WPF 默认方向一致
+        double current = horizontal ? IconScroller.HorizontalOffset : IconScroller.VerticalOffset;
+        StartIconScrollAnimation(current - e.Delta, horizontal);
         e.Handled = true;
     }
 

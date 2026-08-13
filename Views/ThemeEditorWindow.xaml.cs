@@ -45,14 +45,12 @@ public partial class ThemeEditorWindow : Window
         // 折叠尺寸：文件夹覆盖优先，否则默认 150×150
         _collW = folder?.FolderFoldW ?? 150;
         _collH = folder?.FolderFoldH ?? 150;
-        // 展开尺寸：必须与 FolderWindow.RecomputeTargets 完全一致 ——
-        // 列数取 folder/全局；行数按图标数向上取整（图标多于 cols×rows 时面板会自动多出行），否则预览的面板宽高比会偏大、
-        // 实际 UniformToFill 横向裁切更多，导致展开后显示区域相对预览偏移（"偏左"）。
+        // 展开尺寸：必须与 FolderWindow.RecomputeTargets 完全一致（行数=设定行列，图标溢出走滚动条，不再撑大面板）——
+        // 旧代码曾按图标数向上取整多出行，但 RecomputeTargets 已改为固定行列、溢出滚动，
+        // 那样会让编辑器展开的宽高比比真实面板更"高"，导致裁剪后填充比例不符、桌面显示偏移。
         // 容器 = 图标内容网格（IconCell=75）+ 面板内边距（PanelPaddingH=44 / V=38）+ 顶部标题栏（HeaderHeight=34）。
         int cols = Math.Max(1, folder?.FolderColumns ?? S.Data.Columns);
-        int rowsBase = folder?.FolderRows ?? S.Data.Rows;
-        int iconCount = folder?.Shortcuts?.Count ?? 0;
-        int rows = Math.Max(rowsBase, (int)Math.Ceiling(iconCount / (double)cols));
+        int rows = Math.Max(1, folder?.FolderRows ?? S.Data.Rows);
         _expW = cols * 75 + 44;
         _expH = rows * 75 + 34 + 38;
 
@@ -927,7 +925,7 @@ public partial class ThemeEditorWindow : Window
             ? new Rect(GetCropVal(true, "X")!.Value, GetCropVal(true, "Y")!.Value,
                        GetCropVal(true, "W")!.Value, GetCropVal(true, "H")!.Value)
             : null;
-        var win = new ImageCropWindow(path, coll, exp, _collW, _collH, _expW, _expH, editState);
+        var win = new ImageCropWindow(path, coll, exp, _collW, _collH, _expW, _expH, editState, _folder?.Name);
         win.Owner = this;
         if (win.ShowDialog() != true) return;
 
