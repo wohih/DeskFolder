@@ -496,6 +496,7 @@ public class SettingsService
         foreach (var t in svc.Data.Themes)
             t.MigrateLegacyImagePath();
         svc.EnsureDefaults();
+        svc.MigrateFolderThemes();
         return svc;
     }
 
@@ -533,6 +534,17 @@ public class SettingsService
             ?? new ThemeConfig();
     }
 
+    /// <summary>深拷贝一个主题为全新实例（新 Id，并标记为非内置），用于「选中即克隆专属副本」：
+    /// 每个文件夹持有独立外观，互不影响（即使都曾选过同一主题）。</summary>
+    public ThemeConfig CloneTheme(ThemeConfig src)
+    {
+        var json = JsonSerializer.Serialize(src);
+        var clone = JsonSerializer.Deserialize<ThemeConfig>(json) ?? new ThemeConfig();
+        clone.Id = Guid.NewGuid().ToString();
+        clone.BuiltInId = null; // 克隆体不再是内置模板
+        return clone;
+    }
+
     /// <summary>取得指定文件夹应使用的主题：优先文件夹自己的 <see cref="FolderConfig.FolderThemeId"/> 覆盖，
     /// 否则跟随全局当前主题。主题被删除后返回全局主题作为兜底。</summary>
     public ThemeConfig GetThemeForFolder(string? folderThemeId)
@@ -545,23 +557,46 @@ public class SettingsService
         return GetCurrentTheme();
     }
 
-    /// <summary>某个主题是否"正在被使用"（作为全局当前主题，或被任一文件夹引用）；编辑这类主题时才需要通知重绘。</summary>
+    /// <summary>某个主题是否"正在被使用"（被任一文件夹引用）；编辑这类主题时才需要通知重绘。
+    /// 注：全局主题已移除，主题仅以「每文件夹专属副本」形式存在，故只看文件夹引用。</summary>
     public bool IsThemeInUse(string id)
     {
-        if (Data.CurrentThemeId == id) return true;
         return Data.Folders.Any(f => f.FolderThemeId == id);
     }
 
     /// <summary>
-    /// 应用「全局主题」：把该主题设为全局当前主题，并<b>清空所有文件夹的单独外观覆盖</b>，
-    /// 使全局主题对所有文件夹立即生效（覆盖此前任何单文件夹设置）。
-    /// 单独设置某个文件夹外观时请使用 <see cref="FolderConfig.FolderThemeId"/>，不要调用本方法。
+    /// 一次性迁移：确保每个文件夹都持有「非内置」的专属主题副本
+    /// （旧配置中跟随全局、或直接引用内置模板的，会被克隆为私有副本），
+    /// 从而彻底消除「全局主题影响所有文件夹 / 多个文件夹共享同一主题」的耦合。
+    /// 仅在确有需要时克隆，已持有专属副本的文件夹保持不变（可重复安全调用）。
     /// </summary>
-    public void SetGlobalTheme(string id)
+    public void MigrateFolderThemes()
     {
-        Data.CurrentThemeId = id;
+        bool changed = false;
         foreach (var f in Data.Folders)
-            f.FolderThemeId = null;
+        {
+            bool needClone = false;
+            ThemeConfig? src = null;
+            if (string.IsNullOrEmpty(f.FolderThemeId))
+            {
+                needClone = true;
+                src = GetCurrentTheme();
+            }
+            else
+            {
+                var existing = Data.Themes.FirstOrDefault(t => t.Id == f.FolderThemeId);
+                if (existing == null) { needClone = true; src = GetCurrentTheme(); }
+                else if (existing.BuiltInId != null) { needClone = true; src = existing; } // 指向内置模板 → 克隆为专属
+            }
+            if (needClone && src != null)
+            {
+                var clone = CloneTheme(src);
+                Data.Themes.Add(clone);
+                f.FolderThemeId = clone.Id;
+                changed = true;
+            }
+        }
+        if (changed) Save();
     }
 
     public void Save()

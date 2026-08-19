@@ -1,9 +1,12 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
+using DeskFolder.Services;
 
 namespace DeskFolder.Views;
 
@@ -21,7 +24,10 @@ public partial class ImageCropWindow : Window
 {
     private readonly string _path;
     private readonly double _collW, _collH, _expW, _expH;
-    private readonly BitmapImage _src;
+    private BitmapSource _src;
+    private readonly bool _isVideo;
+    private MediaElement? _video;       // 视频源：实时播放，作为裁剪背景（不截图）
+    private int _videoW, _videoH;       // 视频原生宽高（MediaOpened 后才有）
 
     // 视口与图片显示布局
     private const double ViewW = 540, ViewH = 380;
@@ -52,8 +58,8 @@ public partial class ImageCropWindow : Window
     /// <summary>裁剪编辑范围：0=同时编辑折叠/展开两态，1=仅折叠态，2=仅展开态（另态保持原值不变）。</summary>
     private readonly int _editState;
 
-    /// <summary>比例来源：具体文件夹名（按该文件夹行列锁定）或 null（全局默认行列锁定）。
-    /// 用于向用户明示当前裁剪比例按谁的尺寸锁定，避免"全局主题裁剪"被误用到行列不同的文件夹。</summary>
+    /// <summary>比例来源：具体文件夹名（按该文件夹行列锁定）。
+    /// 用于向用户明示当前裁剪比例按谁的尺寸锁定，避免被误用到行列不同的文件夹。</summary>
     private readonly string? _ratioSource;
 
     public ImageCropWindow(string imagePath, Rect? collCrop, Rect? expCrop,
@@ -61,24 +67,57 @@ public partial class ImageCropWindow : Window
         string? ratioSource = null)
     {
         _path = imagePath;
+        _isVideo = ThemeHelper.IsVideoFile(imagePath);
         _collW = collW; _collH = collH; _expW = expW; _expH = expH;
         _collCrop = collCrop; _expCrop = expCrop;
         _editState = editState;
         _ratioSource = ratioSource;
         _edit = editState == 2 ? 1 : 0; // 内部 _edit：0=折叠，1=展开
 
-        try
+        if (_isVideo)
         {
-            _src = new BitmapImage();
-            _src.BeginInit();
-            _src.UriSource = new Uri(imagePath, UriKind.Absolute);
-            _src.CacheOption = BitmapCacheOption.OnLoad;
-            _src.EndInit();
-            _src.Freeze();
+            // 视频：先用占位图（16:9，仅用于初始比例/预览兜底）
+            _src = MakeVideoPlaceholder();
+            // 视频裁剪：直接在画布上「实时播放」视频，让裁剪框画在实时画面上。
+            // 不走「截图取帧」——本机 Shell 缩略图接口（IShellItemImageFactory）对视频返回
+            // E_NOINTERFACE，任何 GetImage 取帧方案都取不到帧（之前多次修复的根因）。
+            // 复用桌面视频背景同一套 MediaElement 渲染管线，渲染本身没问题。
+            _video = new MediaElement
+            {
+                Stretch = Stretch.Fill,
+                LoadedBehavior = MediaState.Play,
+                UnloadedBehavior = MediaState.Manual,
+                IsMuted = true,
+                IsHitTestVisible = false,
+            };
+            _video.MediaOpened += (s, e) =>
+            {
+                _videoW = _video.NaturalVideoWidth;
+                _videoH = _video.NaturalVideoHeight;
+                Diag.Log($"[videofix4] 视频已打开 原生尺寸={_videoW}x{_videoH}");
+                ComputeLayout();
+                Redraw();
+            };
+            _video.MediaEnded += (s, e) => { try { _video.Position = TimeSpan.Zero; } catch { } };
+            try { _video.Source = new Uri(_path, UriKind.Absolute); }
+            catch (Exception ex) { Diag.Log($"[videofix4] 视频源设置失败: {ex.GetType().Name}: {ex.Message}"); }
         }
-        catch
+        else
         {
-            _src = new BitmapImage();
+            try
+            {
+                var b = new BitmapImage();
+                b.BeginInit();
+                b.UriSource = new Uri(imagePath, UriKind.Absolute);
+                b.CacheOption = BitmapCacheOption.OnLoad;
+                b.EndInit();
+                b.Freeze();
+                _src = b;
+            }
+            catch
+            {
+                _src = MakeVideoPlaceholder();
+            }
         }
 
         InitializeComponent();
@@ -120,14 +159,13 @@ public partial class ImageCropWindow : Window
                         $"　原图：{_src.PixelWidth}×{_src.PixelHeight}（像素）。" +
                         $"裁剪比例按 {srcLabel} 的面板尺寸锁定。";
 
-        // 全局主题裁剪：比例按全局默认行列锁定，可能与具体文件夹的实际展开比例不同，
-        // 给出明确提醒，引导用户在对应文件夹的「外观设置」中裁剪以精确匹配。
+        // 裁剪比例按当前文件夹面板尺寸锁定；若调用方未传入文件夹名（理论上不会再发生），
+        // 给出中性提醒引导到对应文件夹裁剪，不再使用「全局主题」措辞。
         if (string.IsNullOrWhiteSpace(_ratioSource))
         {
             WarnText.Visibility = Visibility.Visible;
-            WarnText.Text = "⚠ 当前为「全局主题」裁剪：展开比例按全局默认行列锁定，" +
-                            "可能与你某个文件夹的实际展开比例不同。若需与特定文件夹精确匹配，" +
-                            "请在该文件夹右键 → 外观设置 → 右键主题 → 编辑主题 → 裁剪。";
+            WarnText.Text = "⚠ 当前裁剪比例按全局默认行列锁定，可能与你某个文件夹的实际展开比例不同。" +
+                            "若需与特定文件夹精确匹配，请在该文件夹右键 → 外观设置 → 右键主题 → 编辑主题 → 裁剪。";
         }
 
         BuildScene();
@@ -150,33 +188,67 @@ public partial class ImageCropWindow : Window
             ApplyModeColor();
             Redraw();
         };
+
+        // 视频：在主画布实时播放（见构造函数中创建的 _video），无需截图。
+        if (_isVideo)
+        {
+            InfoText.Text += "（视频文件：将在下方实时播放，请直接拖动裁剪框到满意的画面）";
+        }
     }
+
+    /// <summary>生成一个 16:9 深色占位图（视频首帧提取失败 / 提取前使用）。</summary>
+    private static BitmapSource MakeVideoPlaceholder()
+    {
+        const int w = 160, h = 90;
+        var dv = new DrawingVisual();
+        using (var dc = dv.RenderOpen())
+            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(40, 44, 52)), null, new Rect(0, 0, w, h));
+        var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        rtb.Render(dv);
+        var bmp = new WriteableBitmap(rtb);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    /// <summary>源尺寸（像素）。视频用原生宽高（MediaOpened 前回退 16:9 占位比例），图片用 _src 实际像素。
+    /// 裁剪比例吸附与布局均依赖此值，因此视频与图片走同一套逻辑、桌面视频背景也按同样归一化坐标应用。</summary>
+    private int SrcW => _isVideo ? (_videoW > 0 ? _videoW : 160) : (_src?.PixelWidth > 0 ? _src.PixelWidth : 160);
+    private int SrcH => _isVideo ? (_videoH > 0 ? _videoH : 90) : (_src?.PixelHeight > 0 ? _src.PixelHeight : 90);
+
 
     private static double Clamp(double v, double lo, double hi) => v < lo ? lo : v > hi ? hi : v;
 
     /// <summary>计算图片在视口中的缩放与左上角偏移（等比居中适配 540×380）。</summary>
     private void ComputeLayout()
     {
-        if (_src.PixelWidth <= 0 || _src.PixelHeight <= 0)
+        int sw = SrcW, sh = SrcH;
+        if (sw <= 0 || sh <= 0)
         {
             _s = 1; _dispW = ViewW; _dispH = ViewH; _imgX = 0; _imgY = 0;
             return;
         }
-        _s = Math.Min(ViewW / _src.PixelWidth, ViewH / _src.PixelHeight);
-        _dispW = _src.PixelWidth * _s;
-        _dispH = _src.PixelHeight * _s;
+        _s = Math.Min(ViewW / sw, ViewH / sh);
+        _dispW = sw * _s;
+        _dispH = sh * _s;
         _imgX = (ViewW - _dispW) / 2;
         _imgY = (ViewH - _dispH) / 2;
         ApplyImageLayout();
     }
 
-    /// <summary>把计算出的等比显示尺寸 / 居中偏移应用到原图 Image。</summary>
+    /// <summary>把计算出的等比显示尺寸 / 居中偏移应用到原图 Image（及视频 MediaElement）。</summary>
     private void ApplyImageLayout()
     {
         _img.Width = _dispW;
         _img.Height = _dispH;
         Canvas.SetLeft(_img, _imgX);
         Canvas.SetTop(_img, _imgY);
+        if (_video != null)
+        {
+            _video.Width = _dispW;
+            _video.Height = _dispH;
+            Canvas.SetLeft(_video, _imgX);
+            Canvas.SetTop(_video, _imgY);
+        }
     }
 
     private void BuildScene()
@@ -185,6 +257,15 @@ public partial class ImageCropWindow : Window
         _img.Source = _src;
         _img.IsHitTestVisible = false;
         Canvas.Children.Add(_img);
+
+        // 视频：实时播放层（置于最底，裁剪 UI 在其上）。_img 隐藏，避免占位图压在视频上。
+        if (_video != null)
+        {
+            _img.Visibility = Visibility.Collapsed;
+            _video.Stretch = Stretch.Fill;
+            _video.IsHitTestVisible = false;
+            Canvas.Children.Add(_video);
+        }
 
         // 另一态参考框（虚线，不可编辑）
         _refRect.StrokeThickness = 2;
@@ -235,10 +316,10 @@ public partial class ImageCropWindow : Window
         double panelW = _edit == 0 ? _collW : _expW;
         double panelH = _edit == 0 ? _collH : _expH;
         if (panelW <= 0 || panelH <= 0) return 1;
-        if (_src.PixelWidth <= 0 || _src.PixelHeight <= 0) return 1;
+        if (SrcW <= 0 || SrcH <= 0) return 1;
         // 注意：PixelHeight/PixelWidth 均为 int，必须转 double 再做除法，否则整数除法 (1190/1264)=0
         // 会把整个比例算成 0，导致 SnapToAspect 退化成正方形比例（展开态明显变方、折叠态因本身近方形而"看似正常"）
-        double a = (panelW / panelH) * ((double)_src.PixelHeight / _src.PixelWidth);
+        double a = (panelW / panelH) * ((double)SrcH / SrcW);
         return a > 0 ? a : 1;
     }
 

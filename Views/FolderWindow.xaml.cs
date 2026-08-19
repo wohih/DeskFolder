@@ -244,7 +244,7 @@ public partial class FolderWindow : Window
         }
 
         Loaded += OnLoaded;
-        Closed += (_, _) => { StopGifTimers(); CleanupMusicService(); }; // 关闭时释放 GIF 计时器并退订共享音乐服务，避免泄漏
+        Closed += (_, _) => { StopGifTimers(); StopAllVideos(); CleanupMusicService(); }; // 关闭时释放 GIF/视频/轮播计时器并退订共享音乐服务，避免泄漏
     }
 
     // ---------------- 原生窗口样式：隐藏任务切换器 / 桌面挂件化（兼容 Wallpaper Engine） ----------------
@@ -1051,6 +1051,8 @@ public partial class FolderWindow : Window
     private void AnimateTo(bool expand, int ms)
     {
         _animExpand = expand;
+        // 展开/收起时切换视频播放：目标槽播放、另一槽暂停解码（隐藏槽不再占用 CPU/内存）
+        SyncVideoPlayback(expand);
         _animMs = Math.Max(ms, 80);
         _animStartTicks = Stopwatch.GetTimestamp();
 
@@ -1799,9 +1801,6 @@ public partial class FolderWindow : Window
         S.Save();
         S.NotifyChanged(); // 触发 RefreshLayout：按新自由尺寸干净重算
     }
-
-    private void GlobalSettingsMenu_Click(object sender, RoutedEventArgs e) =>
-        ((App)System.Windows.Application.Current).ShowSettings();
 
     /// <summary>打开「外观设置」对话框，单独设置「此文件夹」的外观主题（左键选主题即应用，右键编辑主题）。</summary>
     private void AppearanceMenu_Click(object sender, RoutedEventArgs e)
@@ -4301,6 +4300,13 @@ public partial class FolderWindow : Window
         public ThemeConfig Theme = null!;
         public bool UseExpandedCrop;
         public System.Windows.Controls.Image Img = null!;
+        /// <summary>承载 Img/Media 的容器：ClipToBounds 裁掉视频放大/裁剪变换的溢出，避免影响相邻元素。</summary>
+        public Grid Host = null!;
+        /// <summary>视频背景元素（按需创建，图片为主题时保持 null）。静音循环播放。</summary>
+        public MediaElement? Media = null;
+        /// <summary>驱动视频播放的 MediaClock（RepeatBehavior=Forever 无缝循环）。
+        /// 用 Clock.Controller.Pause/Play 把播放严格绑定到「当前可见槽」，隐藏槽暂停解码以省资源。</summary>
+        public MediaClock? Clock = null;
         public int Index;
         public DispatcherTimer? GifTimer;
     }
@@ -4332,12 +4338,23 @@ public partial class FolderWindow : Window
             if (theme.Expanded.Play != ImagePlayMode.Off && theme.Expanded.Paths.Count > 1)
                 StartRotate(false, _slotExpanded);
         }
+        // 仅让当前可见的槽播放视频，隐藏槽暂停解码（文件夹初始为折叠态）
+        SyncVideoPlayback(_expanded);
     }
 
-    /// <summary>在 Border 内部网格中插入一个铺满的图片元素，返回状态槽。</summary>
+    /// <summary>在 Border 内部网格中插入一个铺满的图片/视频容器，返回状态槽。
+    /// 容器 Host（Grid）开启 ClipToBounds：视频裁剪用 RenderTransform 变换时溢出部分会被裁掉，
+    /// 与图片 CroppedBitmap 的视觉效果一致（选框区域精确铺满、不外溢）。</summary>
     private ImageSlot? CreateSlot(Border target, ImagePlaylist playlist, bool useExpandedCrop, ThemeConfig theme)
     {
         if (target.Child is not Grid grid) return null;
+        var host = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ClipToBounds = true,
+            IsHitTestVisible = false
+        };
         var img = new System.Windows.Controls.Image
         {
             Stretch = Stretch.Fill,
@@ -4346,26 +4363,28 @@ public partial class FolderWindow : Window
             Opacity = ThemeHelper.Clamp(theme.BackgroundOpacity, 0, 1),
             IsHitTestVisible = false
         };
+        host.Children.Add(img);
         int rows = grid.RowDefinitions.Count > 0 ? grid.RowDefinitions.Count : 1;
         int cols = grid.ColumnDefinitions.Count > 0 ? grid.ColumnDefinitions.Count : 1;
-        Grid.SetRowSpan(img, rows);
-        Grid.SetColumnSpan(img, cols);
-        grid.Children.Insert(0, img);
-        _themeVisuals.Add(img);
+        Grid.SetRowSpan(host, rows);
+        Grid.SetColumnSpan(host, cols);
+        grid.Children.Insert(0, host);
+        _themeVisuals.Add(host);
         target.Background = System.Windows.Media.Brushes.Transparent;
-        return new ImageSlot { Target = target, Playlist = playlist, UseExpandedCrop = useExpandedCrop, Theme = theme, Img = img };
+        return new ImageSlot { Target = target, Playlist = playlist, UseExpandedCrop = useExpandedCrop, Theme = theme, Img = img, Host = host };
     }
 
-    /// <summary>按裁剪区域对单帧取景；优先使用文件夹级裁剪配置（如果有），否则使用主题的裁剪配置；Stretch=Fill 保证选区精确铺满。</summary>
-    private BitmapSource CropFrame(BitmapSource src, bool expanded, ThemeConfig theme)
+    /// <summary>读取某状态（折叠/展开）的有效裁剪区域（归一化 0-1，相对原图）。优先文件夹级，否则主题级。
+    /// 返回 false 表示无裁剪（显示整图）。供图片 CropFrame 与视频 ApplyVideoCrop 共用。</summary>
+    private bool TryReadCrop(bool expanded, ThemeConfig theme,
+        out double nx, out double ny, out double nw, out double nh)
     {
-        bool hasCrop = _config.HasFolderImageCrop || _config.HasFolderImageCropExpanded
+        nx = ny = nw = nh = 0;
+        bool hasCrop = (_config.HasFolderImageCrop || _config.HasFolderImageCropExpanded)
             ? (expanded ? _config.HasFolderImageCropExpanded : _config.HasFolderImageCrop)
             : (expanded ? theme.HasImageCropExpanded : theme.HasImageCrop);
-        if (!hasCrop) return src;
+        if (!hasCrop) return false;
 
-        // 优先使用文件夹级裁剪配置
-        double nx, ny, nw, nh;
         if (expanded ? _config.HasFolderImageCropExpanded : _config.HasFolderImageCrop)
         {
             nx = (expanded ? _config.FolderImageCropExpandedX : _config.FolderImageCropX)!.Value;
@@ -4380,6 +4399,13 @@ public partial class FolderWindow : Window
             nw = (expanded ? theme.ImageCropExpandedW : theme.ImageCropW)!.Value;
             nh = (expanded ? theme.ImageCropExpandedH : theme.ImageCropH)!.Value;
         }
+        return nw > 0 && nh > 0;
+    }
+
+    /// <summary>按裁剪区域对单帧取景；优先使用文件夹级裁剪配置（如果有），否则使用主题的裁剪配置；Stretch=Fill 保证选区精确铺满。</summary>
+    private BitmapSource CropFrame(BitmapSource src, bool expanded, ThemeConfig theme)
+    {
+        if (!TryReadCrop(expanded, theme, out var nx, out var ny, out var nw, out var nh)) return src;
 
         int x = (int)Math.Round(nx * src.PixelWidth);
         int y = (int)Math.Round(ny * src.PixelHeight);
@@ -4427,6 +4453,7 @@ public partial class FolderWindow : Window
         if (playlist.Paths.Count == 0)
         {
             slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)); // 兜底淡底色
+            StopVideo(slot);
             return;
         }
         index = ((index % playlist.Paths.Count) + playlist.Paths.Count) % playlist.Paths.Count;
@@ -4434,13 +4461,20 @@ public partial class FolderWindow : Window
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
             slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0));
+            StopVideo(slot);
             return;
         }
         try
         {
-            bool isGif = path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase);
-            if (isGif)
+            if (ThemeHelper.IsVideoFile(path))
             {
+                // 视频背景：静音循环播放，裁切由 ApplyVideoCrop 用 RenderTransform 实现
+                LoadVideo(slot, path);
+                slot.Target.Background = System.Windows.Media.Brushes.Transparent;
+            }
+            else if (path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+            {
+                StopVideo(slot);
                 // GIF 动图：需逐帧访问，用 BitmapDecoder（GIF 通常分辨率低，全量解码可接受）
                 var decoder = BitmapDecoder.Create(new Uri(path, UriKind.Absolute),
                     BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
@@ -4478,6 +4512,7 @@ public partial class FolderWindow : Window
             }
             else
             {
+                StopVideo(slot);
                 // 静态图（png/jpg/bmp/tif 等）：按显示尺寸降采样解码，避免高分辨率原图全量驻留内存
                 int decodePx = SlotDecodePx(slot);
                 var bmp = new BitmapImage();
@@ -4494,7 +4529,108 @@ public partial class FolderWindow : Window
         catch
         {
             slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0));
+            StopVideo(slot);
         }
+    }
+
+    /// <summary>创建/复用槽内的 MediaElement 播放视频背景。
+    /// 优化点：
+    /// 1) 改用 MediaTimeline + MediaClock（RepeatBehavior=Forever）实现原生无缝循环，避免 MediaEnded 重定位造成的卡顿；
+    /// 2) 用 Clock.Controller.Pause/Play 把播放严格绑定到「当前可见槽」——同一文件夹的折叠/展开槽只有一个可见，
+    ///    原先两者会同时解码同一视频（2 个 MediaElement 常驻），是内存飙升与卡顿的主因；隐藏槽暂停后不再解码，省 CPU/内存。</summary>
+    private void LoadVideo(ImageSlot slot, string path)
+    {
+        if (slot.Media == null)
+        {
+            var me = new MediaElement
+            {
+                Stretch = Stretch.Fill,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                IsHitTestVisible = false,
+                LoadedBehavior = MediaState.Manual,   // 由 Clock 驱动，不自动播放
+                UnloadedBehavior = MediaState.Close,
+                IsMuted = true,
+                Volume = 0
+            };
+            slot.Host.Children.Add(me);
+            slot.Media = me;
+            // 容器尺寸变化（展开/收起动画、窗口尺寸调整）时重新套用裁切变换
+            slot.Host.SizeChanged += (_, _) => ApplyVideoCrop(slot);
+        }
+        try
+        {
+            // 同一槽重载时先停掉旧时钟
+            slot.Clock?.Controller?.Stop();
+            slot.Media.Clock = null;
+
+            var timeline = new MediaTimeline(new Uri(path, UriKind.Absolute))
+            {
+                RepeatBehavior = RepeatBehavior.Forever   // 原生无限循环，无需 MediaEnded 重定位
+            };
+            var clock = timeline.CreateClock();
+            slot.Media.Clock = clock;
+            slot.Clock = clock;
+            clock.Controller?.Pause();   // 初始暂停：由 SyncVideoPlayback 按可见状态决定播放/暂停
+        }
+        catch { }
+        slot.Media.Visibility = Visibility.Visible;
+        slot.Img.Visibility = Visibility.Collapsed;
+        ApplyVideoCrop(slot);
+    }
+
+    /// <summary>停止并隐藏槽内的视频（切回图片/清空时调用）。</summary>
+    private void StopVideo(ImageSlot slot)
+    {
+        if (slot.Media != null)
+        {
+            try { slot.Clock?.Controller?.Stop(); } catch { }
+            try { slot.Media.Clock = null; } catch { }
+            slot.Clock = null;
+            try { slot.Media.Source = null; } catch { }
+            slot.Media.Visibility = Visibility.Collapsed;
+        }
+        slot.Img.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>按裁剪区域对视频施加 RenderTransform：选区（归一化）缩放 1/nw、1/nh 后平移到容器原点，
+    /// 使选区精确铺满容器（与图片 CroppedBitmap + Stretch=Fill 效果一致）。无裁切则清空变换。</summary>
+    private void ApplyVideoCrop(ImageSlot slot)
+    {
+        if (slot.Media == null) return;
+        double W = slot.Host.ActualWidth, H = slot.Host.ActualHeight;
+        if (W <= 0 || H <= 0) { slot.Media.RenderTransform = null; return; } // 布局未就绪，SizeChanged 会重算
+        if (!TryReadCrop(slot.UseExpandedCrop, slot.Theme, out var nx, out var ny, out var nw, out var nh))
+        {
+            slot.Media.RenderTransform = null;
+            return;
+        }
+        if (nw <= 0 || nh <= 0) { slot.Media.RenderTransform = null; return; }
+        var tg = new TransformGroup();
+        tg.Children.Add(new ScaleTransform(1 / nw, 1 / nh));
+        tg.Children.Add(new TranslateTransform(-nx / nw * W, -ny / nh * H));
+        slot.Media.RenderTransform = tg;
+    }
+
+    /// <summary>按当前可见状态同步视频播放：仅「可见槽」播放，隐藏槽暂停解码以省 CPU/内存。
+    /// 一个文件夹非展开即折叠，同一时刻只有一个槽可见，故同一视频只解码一份（修复双解码导致的内存飙升与卡顿）。</summary>
+    private void SyncVideoPlayback(bool expanded)
+    {
+        SyncOneVideo(_slotCollapsed, !expanded); // 折叠态：未展开时播放
+        SyncOneVideo(_slotExpanded, expanded);    // 展开态：展开时播放
+    }
+
+    /// <summary>对单个槽：应播放则 Clock.Resume（MediaClock 被分配即自动 Begin，暂停后用 Resume 续播），
+    /// 应隐藏则 Clock.Pause（停止解码但不释放文件，切换回时不闪烁）。</summary>
+    private void SyncOneVideo(ImageSlot? slot, bool shouldPlay)
+    {
+        if (slot?.Media == null || slot.Clock == null) return;
+        try
+        {
+            if (shouldPlay) slot.Clock.Controller?.Resume();
+            else slot.Clock.Controller?.Pause();
+        }
+        catch { }
     }
 
     /// <summary>启动轮播/随机切换计时器。shared=true 表示单图模式（折叠/展开共用索引，两者同步切换）；
@@ -4538,13 +4674,39 @@ public partial class FolderWindow : Window
         return (cur + 1) % playlist.Paths.Count;
     }
 
-    /// <summary>停止并清空图片轮播槽（含轮播计时器），不触碰 GIF 计时器（由 ClearThemeVisuals 统一处理）。</summary>
+    /// <summary>停止并清空图片轮播槽（含轮播计时器与视频播放），不触碰 GIF 计时器（由 ClearThemeVisuals 统一处理）。</summary>
     private void ClearImageSlots()
     {
         foreach (var t in _rotateTimers) t.Stop();
         _rotateTimers.Clear();
+        foreach (var slot in new[] { _slotCollapsed, _slotExpanded })
+        {
+            if (slot?.Media != null)
+            {
+                try { slot.Clock?.Controller?.Stop(); } catch { }
+                try { slot.Media.Clock = null; } catch { }
+                slot.Clock = null;
+                try { slot.Media.Source = null; } catch { }
+            }
+        }
         _slotCollapsed = null;
         _slotExpanded = null;
+    }
+
+    /// <summary>窗口关闭时释放所有视频时钟与轮播计时器（避免 MediaElement / DispatcherTimer 泄漏）。</summary>
+    private void StopAllVideos()
+    {
+        foreach (var slot in new[] { _slotCollapsed, _slotExpanded })
+        {
+            if (slot?.Media != null)
+            {
+                try { slot.Clock?.Controller?.Stop(); } catch { }
+                try { slot.Media.Clock = null; } catch { }
+                slot.Clock = null;
+            }
+        }
+        foreach (var t in _rotateTimers) t.Stop();
+        _rotateTimers.Clear();
     }
 
     /// <summary>当前是否为图片背景模式。</summary>

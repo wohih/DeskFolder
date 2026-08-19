@@ -26,7 +26,12 @@ public partial class SettingsWindow : Window
             AnimSection.Visibility = Visibility.Collapsed;
             FolderMgmtSection.Visibility = Visibility.Collapsed;
             BottomButtons.Visibility = Visibility.Collapsed;
-            ThemeHint.Text = "左键点击主题名即可单独应用「此文件夹」的外观；右键点击主题名可详细编辑主题。";
+            ThemeHint.Text = "左键点击主题名即可单独应用「此文件夹」的外观（自动复制为专属副本，与其它文件夹互不影响）；右键点击主题名可详细编辑主题。";
+        }
+        else
+        {
+            // 全局模式：仅保留动画 / 排列等全局项，移除「外观/主题」设置（外观须按文件夹单独设置）
+            ThemeCard.Visibility = Visibility.Collapsed;
         }
 
         LoadValues();
@@ -43,13 +48,9 @@ public partial class SettingsWindow : Window
         AnimValue.Text = d.AnimationMs.ToString();
         HoverValue.Text = d.HoverDelayMs.ToString();
 
-        ThemeList.ItemsSource = d.Themes;
-        _suppress = true;
-        // 单文件夹模式：选中该文件夹当前生效的主题（可能是它自己的覆盖，也可能是全局主题）
-        ThemeList.SelectedValue = _scopeFolder != null
-            ? S.GetThemeForFolder(_scopeFolder.FolderThemeId).Id
-            : d.CurrentThemeId;
-        _suppress = false;
+        // 主题列表仅在「单文件夹外观」模式下加载（全局模式已隐藏外观分区）
+        if (_scopeFolder != null)
+            RefreshThemeList();
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -77,19 +78,17 @@ public partial class SettingsWindow : Window
     private void ThemeList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppress) return;
+        if (_scopeFolder == null) return; // 全局模式不再处理主题
         if (ThemeList.SelectedItem is not ThemeConfig t) return;
-        if (_scopeFolder != null)
-        {
-            // 单文件夹模式：把该主题绑定到「此文件夹」，仅这一处即时生效（不跟随全局广播）
-            _scopeFolder.FolderThemeId = t.Id;
-        }
-        else
-        {
-            // 全局模式：设为全局主题并清空所有文件夹的单独覆盖，使全局对所有文件夹生效
-            S.SetGlobalTheme(t.Id);
-        }
+        if (t.Id == _scopeFolder.FolderThemeId) return; // 选中当前副本，无需处理
+        // 克隆为专属副本，保证与其它文件夹互不影响（即使都曾选过同一主题）
+        var clone = S.CloneTheme(t);
+        S.Data.Themes.Add(clone);
+        CleanupOrphanTheme(_scopeFolder.FolderThemeId);
+        _scopeFolder.FolderThemeId = clone.Id;
         S.Save();
-        S.NotifyChanged(); // 实时切换（目标文件夹窗口即时生效）
+        S.NotifyChanged(); // 实时切换（仅当前文件夹窗口生效）
+        RefreshThemeList();
     }
 
     private void ThemeList_PreviewMouseRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -106,41 +105,59 @@ public partial class SettingsWindow : Window
 
     private void OpenThemeEditor(ThemeConfig theme)
     {
-        var win = new ThemeEditorWindow(theme, _scopeFolder);
+        ThemeConfig target = theme;
+        if (_scopeFolder != null && theme.BuiltInId != null)
+        {
+            // 编辑内置模板前先克隆为专属副本，避免改动模板影响其它文件夹
+            var clone = S.CloneTheme(theme);
+            S.Data.Themes.Add(clone);
+            CleanupOrphanTheme(_scopeFolder.FolderThemeId);
+            _scopeFolder.FolderThemeId = clone.Id;
+            S.Save();
+            S.NotifyChanged();
+            target = clone;
+        }
+        var win = new ThemeEditorWindow(target, _scopeFolder);
         win.Owner = this;
         win.ShowDialog();
-        // 主题名 / 颜色可能已变化，刷新列表（保持当前选中项）
-        ThemeList.ItemsSource = null;
-        ThemeList.ItemsSource = S.Data.Themes;
-        _suppress = true;
-        ThemeList.SelectedValue = _scopeFolder != null
-            ? S.GetThemeForFolder(_scopeFolder.FolderThemeId).Id
-            : S.Data.CurrentThemeId;
-        _suppress = false;
+        RefreshThemeList();
     }
 
     private void NewTheme_Click(object sender, RoutedEventArgs e)
     {
-        var src = S.GetCurrentTheme();
-        var nt = new ThemeConfig
-        {
-            Name = "新主题",
-            BackgroundColor = src.BackgroundColor,
-            BackgroundOpacity = src.BackgroundOpacity,
-            CornerRadius = src.CornerRadius
-        };
+        if (_scopeFolder == null) return; // 全局模式无主题
+        var baseTheme = S.GetThemeForFolder(_scopeFolder.FolderThemeId);
+        var nt = S.CloneTheme(baseTheme);
+        nt.Name = "新主题";
         S.Data.Themes.Add(nt);
-        if (_scopeFolder != null)
-            _scopeFolder.FolderThemeId = nt.Id;   // 单文件夹模式：新建主题直接应用到此文件夹
-        else
-            S.SetGlobalTheme(nt.Id);              // 全局模式：新建主题并广播给所有文件夹
+        CleanupOrphanTheme(_scopeFolder.FolderThemeId);
+        _scopeFolder.FolderThemeId = nt.Id;
         S.Save();
         S.NotifyChanged();
-        ThemeList.ItemsSource = null;
-        ThemeList.ItemsSource = S.Data.Themes;
-        _suppress = true;
-        ThemeList.SelectedValue = nt.Id;
-        _suppress = false;
+        RefreshThemeList();
         OpenThemeEditor(nt);
+    }
+
+    /// <summary>刷新主题列表为「内置模板 + 本文件夹当前专属副本」，并高亮当前项。</summary>
+    private void RefreshThemeList()
+    {
+        if (_scopeFolder == null) return;
+        _suppress = true;
+        var list = S.Data.Themes.Where(t => t.BuiltInId != null).ToList();
+        var cur = S.Data.Themes.FirstOrDefault(t => t.Id == _scopeFolder.FolderThemeId);
+        if (cur != null && cur.BuiltInId == null) list.Add(cur); // 显示本文件夹自身的专属副本，便于再次编辑
+        ThemeList.ItemsSource = list;
+        ThemeList.SelectedValue = _scopeFolder.FolderThemeId;
+        _suppress = false;
+    }
+
+    /// <summary>若旧主题是非内置、且不再被任何其它文件夹引用，则从主题库中移除（避免克隆体不断堆积）。</summary>
+    private void CleanupOrphanTheme(string? oldId)
+    {
+        if (string.IsNullOrEmpty(oldId)) return;
+        var old = S.Data.Themes.FirstOrDefault(t => t.Id == oldId);
+        if (old == null || old.BuiltInId != null) return; // 内置模板始终保留
+        bool referencedElsewhere = S.Data.Folders.Any(f => f != _scopeFolder && f.FolderThemeId == oldId);
+        if (!referencedElsewhere) S.Data.Themes.Remove(old);
     }
 }

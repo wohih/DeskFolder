@@ -25,8 +25,6 @@
             <MenuItem Header="插件管理…" Click="PluginsMenu_Click"/>
             <Separator/>
             <MenuItem Header="删除该文件夹" Tag="Delete" Foreground="#C0392B" Click="DeleteMenu_Click"/>
-            <Separator/>
-            <MenuItem Header="全局设置…" Click="GlobalSettingsMenu_Click"/>
         </ContextMenu>
     </Window.Resources>
 

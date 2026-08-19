@@ -51,7 +51,7 @@
             </Border>
 
             <!-- 主题外观 卡片 -->
-            <Border CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="18,16" Margin="0,0,0,12">
+            <Border x:Name="ThemeCard" CornerRadius="10" Background="White" BorderBrush="#E8E8E8" BorderThickness="1" Padding="18,16" Margin="0,0,0,12">
                 <StackPanel x:Name="ThemeSection">
                     <!-- 标题行 + 画刷图标 -->
                     <Grid Margin="0,0,0,10">

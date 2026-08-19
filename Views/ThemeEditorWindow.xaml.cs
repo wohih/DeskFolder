@@ -13,7 +13,8 @@ namespace DeskFolder.Views;
 /// 单个主题的详细设置：名称、类型（填充颜色 / 简约方框 / 图片背景）。
 /// 填充颜色：背景颜色（H/S/V + 十六进制，范围不限）+ 背景透明度 + 圆角。
 /// 简约方框：方框颜色 + 方框宽度 + 方框类型 + 圆角（完全透明背景，仅边框）。
-/// 图片背景：导入图片（支持 png/jpg/bmp/gif/tif/wmp/ico，GIF 等动图自动播放）+ 图片透明度 + 圆角。
+/// 图片背景：导入图片或视频（png/jpg/bmp/gif/tif/wmp/ico 及 mp4/wmv/avi/mov/m4v/mkv 等；
+/// 视频静音循环播放，GIF 等动图自动播放）+ 图片/视频透明度 + 圆角。
 /// 若正在编辑"当前主题"，所有改动实时反映到桌面的文件夹窗口。
 /// </summary>
 public partial class ThemeEditorWindow : Window
@@ -35,7 +36,7 @@ public partial class ThemeEditorWindow : Window
     /// <summary>
     /// 编辑单个主题。folder 不为 null 时，按该文件夹的实际折叠 / 展开尺寸计算裁剪取景辅助框，
     /// 且裁剪配置保存到文件夹（不影响其他使用同一主题的文件夹）；
-    /// folder 为 null（全局主题设置）时使用默认折叠尺寸与按全局行列估算的展开尺寸，裁剪配置保存到主题上。
+    /// folder 为 null 时使用默认折叠尺寸与按全局行列估算的展开尺寸（当前外观已改为仅文件夹单独设置，folder 一般不为 null）。
     /// </summary>
     public ThemeEditorWindow(ThemeConfig theme, FolderConfig? folder = null)
     {
@@ -613,9 +614,11 @@ public partial class ThemeEditorWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Title = "选择文件夹背景图片",
-            Filter = "图片文件 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.wmp;*.ico)|" +
-                     "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.wmp;*.ico|所有文件 (*.*)|*.*",
+            Title = "选择文件夹背景图片 / 视频",
+            Filter = "图片/视频文件 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.wmp;*.ico;" +
+                     "*.mp4;*.wmv;*.avi;*.mov;*.m4v;*.mkv;*.webm;*.mpg;*.mpeg)|" +
+                     "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.wmp;*.ico;" +
+                     "*.mp4;*.wmv;*.avi;*.mov;*.m4v;*.mkv;*.webm;*.mpg;*.mpeg|所有文件 (*.*)|*.*",
             Multiselect = true
         };
         if (dlg.ShowDialog() != true) return;
@@ -700,6 +703,9 @@ public partial class ThemeEditorWindow : Window
                 thumb.Source = bmp;
             }
             catch { }
+            // 视频文件无法用 BitmapImage 解码：回退到统一的视频占位缩略图
+            if (thumb.Source == null && ThemeHelper.IsVideoFile(path))
+                thumb.Source = ThemeHelper.VideoThumbPlaceholder();
             var name = new TextBlock
             {
                 Text = System.IO.Path.GetFileName(path),
@@ -837,7 +843,7 @@ public partial class ThemeEditorWindow : Window
 
     // ---------------- 裁剪配置：支持文件夹级覆盖 ----------------
     // 当 _folder 不为 null 时，裁剪配置保存到 FolderConfig（不影响其他使用同一主题的文件夹）；
-    // 当 _folder 为 null 时，裁剪配置保存到 ThemeConfig（全局主题设置）。
+    // 当 _folder 为 null 时，裁剪配置保存到 ThemeConfig（当前外观已改为仅文件夹单独设置，_folder 一般不为 null）。
     // 读取时优先使用文件夹级配置，如没有则回退到主题配置。
 
     private bool HasCrop(bool expanded) =>
@@ -988,12 +994,17 @@ public partial class ThemeEditorWindow : Window
         if (MessageBox.Show("确定删除该主题吗？", "删除主题",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
-        S.Data.Themes.Remove(_theme);
-        if (S.Data.CurrentThemeId == _theme.Id)
-            S.Data.CurrentThemeId = S.Data.Themes.First(t => t.BuiltInId == "semi").Id;
-        // 任何引用了被删主题的文件夹都回退到全局主题（FolderThemeId 置空）
+        // 任何引用了被删主题的文件夹：重新绑定到默认「半透明」专属副本，避免丢失外观（不再回退到全局）
         foreach (var f in S.Data.Folders)
-            if (f.FolderThemeId == _theme.Id) f.FolderThemeId = null;
+        {
+            if (f.FolderThemeId == _theme.Id)
+            {
+                var fallback = S.CloneTheme(S.Data.Themes.First(t => t.BuiltInId == "semi"));
+                S.Data.Themes.Add(fallback);
+                f.FolderThemeId = fallback.Id;
+            }
+        }
+        S.Data.Themes.Remove(_theme);
         S.Save();
         S.NotifyChanged();
         DialogResult = true;

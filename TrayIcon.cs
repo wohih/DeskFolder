@@ -7,8 +7,8 @@ namespace DeskFolder;
 
 /// <summary>
 /// 轻量系统托盘图标（纯 Win32 实现，不依赖 WinForms / System.Drawing）。
-/// 用于在不占用任务栏的情况下提供"全局主题设置 / 重新排列 / 开机自启动 / 退出"入口。
-/// （单文件夹外观设置已移入各文件夹的右键菜单；双击不再打开设置，改为右键菜单选择。）
+/// 用于在不占用任务栏的情况下提供"全局设置（动画/排列）/ 重新排列 / 新建空白文件夹 / 开机自启动 / 退出"入口。
+/// （外观/主题已改为仅能在各文件夹右键「外观设置」中单独设置，不再有全局外观设置。）
 /// </summary>
 internal sealed class TrayIcon : IDisposable
 {
@@ -128,7 +128,7 @@ internal sealed class TrayIcon : IDisposable
     private void ShowMenu()
     {
         IntPtr menu = CreatePopupMenu();
-        AppendMenu(menu, MF_STRING, 1, "全局主题设置");
+        AppendMenu(menu, MF_STRING, 1, "全局设置（动画/排列）");
         AppendMenu(menu, MF_STRING, 2, "重新排列");
         AppendMenu(menu, MF_STRING, 5, "新建空白文件夹");
         uint autoFlags = MF_STRING | (_isAutoStart() ? MF_CHECKED : 0);
