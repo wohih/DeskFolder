@@ -1977,6 +1977,9 @@ public partial class FolderWindow : Window
             .ToList();
 
         _config.Shortcuts = ordered;
+        // 关键：拖拽换位会把每个图标的格子坐标存进 ShortcutPositions，BuildGrid 优先按该坐标排布、
+        // 忽略 Shortcuts 列表顺序；不清除则「排列重置」只改了列表、显示毫无变化。重置需一并清空手动坐标。
+        _config.ShortcutPositions.Clear();
         S.Save();
 
         // 重新解析图标并重建预览/网格（展开态会同步重排面板）
