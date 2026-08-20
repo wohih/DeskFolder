@@ -1958,6 +1958,33 @@ public partial class FolderWindow : Window
         win.ShowDialog();
     }
 
+    /// <summary>「排列重置」：把当前文件夹的图标按显示名（字典序）重新排序，仅影响本文件夹。
+    /// 排序键用解析后的显示名（失败则回退 shortcut 文件名），不重新提取图标以保持轻量。</summary>
+    private void ArrangeResetMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (_config.Shortcuts.Count == 0) return;
+
+        string NameOf(string path)
+        {
+            var item = ShortcutService.Resolve(path, loadIcon: false);
+            return (item?.Name ?? System.IO.Path.GetFileNameWithoutExtension(path)) ?? path;
+        }
+
+        var ordered = _config.Shortcuts
+            .Select(p => new { Path = p, SortKey = NameOf(p) })
+            .OrderBy(x => x.SortKey, StringComparer.CurrentCultureIgnoreCase)
+            .Select(x => x.Path)
+            .ToList();
+
+        _config.Shortcuts = ordered;
+        S.Save();
+
+        // 重新解析图标并重建预览/网格（展开态会同步重排面板）
+        LoadItems();
+
+        if (!IsMouseOver) _collapseTimer.Start();
+    }
+
     /// <summary>拖拽右下角手柄：实时改变折叠图标像素尺寸（完全自由，无任何吸附），
     /// 内部图标随拖动逐帧等比缩放撑满框体。</summary>
     private void ResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)

@@ -21,6 +21,7 @@
             <MenuItem Header="展开图标显示排列…" Click="ExpandArrangeMenu_Click"/>
             <MenuItem Header="折叠图标大小设置…" Click="SizeMenu_Click"/>
             <MenuItem Header="折叠图标显示排列…" Click="ArrangeMenu_Click"/>
+            <MenuItem Header="排列重置" Click="ArrangeResetMenu_Click"/>
             <MenuItem Header="外观设置…" Click="AppearanceMenu_Click"/>
             <MenuItem x:Name="EdgeSettingsMenu" Header="贴边设置…" Click="EdgeSettingsMenu_Click"/>
             <MenuItem Header="插件管理…" Click="PluginsMenu_Click"/>
