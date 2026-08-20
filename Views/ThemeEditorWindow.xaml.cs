@@ -215,11 +215,11 @@ public partial class ThemeEditorWindow : Window
     private void ShowGroupsForMode(ThemeMode mode)
     {
         bool color = mode is ThemeMode.Fill or ThemeMode.BorderOnly;
-        bool opacity = mode is ThemeMode.Fill or ThemeMode.Image or ThemeMode.Gradient or ThemeMode.Neon;
+        bool opacity = mode is ThemeMode.Fill or ThemeMode.Image or ThemeMode.Gradient or ThemeMode.Neon or ThemeMode.Edge;
         ColorGroup.Visibility = color ? Visibility.Visible : Visibility.Collapsed;
         OpacityCard.Visibility = opacity ? Visibility.Visible : Visibility.Collapsed;
         BorderCard.Visibility = mode == ThemeMode.BorderOnly ? Visibility.Visible : Visibility.Collapsed;
-        ImageCard.Visibility = mode == ThemeMode.Image ? Visibility.Visible : Visibility.Collapsed;
+        ImageCard.Visibility = mode is ThemeMode.Image or ThemeMode.Edge ? Visibility.Visible : Visibility.Collapsed;
         RadiusGroup.Visibility = Visibility.Visible;
 
         GradientCard.Visibility = mode == ThemeMode.Gradient ? Visibility.Visible : Visibility.Collapsed;
@@ -233,6 +233,7 @@ public partial class ThemeEditorWindow : Window
         OpacityLabel.Text = mode switch
         {
             ThemeMode.Image => "图片透明度",
+            ThemeMode.Edge => "图片透明度",
             ThemeMode.Neon => "背景透明度",
             ThemeMode.Gradient => "渐变透明度",
             _ => "背景透明度"
@@ -540,7 +541,7 @@ public partial class ThemeEditorWindow : Window
             SampleText.Effect = null;
             ImageThumb.Source = null;
         }
-        else if (_theme.Mode == ThemeMode.Image)
+        else if (_theme.Mode == ThemeMode.Image || _theme.Mode == ThemeMode.Edge)
         {
             ColorPreview.Background = Brushes.Transparent;
             SampleChip.Background = Brushes.Transparent;
@@ -1069,7 +1070,7 @@ public partial class ThemeEditorWindow : Window
     /// <summary>同步三个分段按钮的视觉状态（选中=蓝底白字，未选=灰底深字）。</summary>
     private void SyncModeButtons(int selectedIndex)
     {
-        var buttons = new[] { ModeFillBtn, ModeBorderBtn, ModeImageBtn, ModeGradientBtn, ModeNeonBtn, ModeGlassBtn, ModeAcrylicBtn, ModePaperBtn, ModeEmbossBtn };
+        var buttons = new[] { ModeFillBtn, ModeBorderBtn, ModeImageBtn, ModeGradientBtn, ModeNeonBtn, ModeGlassBtn, ModeAcrylicBtn, ModePaperBtn, ModeEmbossBtn, ModeEdgeBtn };
         for (int i = 0; i < buttons.Length; i++)
         {
             if (i == selectedIndex)
@@ -1091,6 +1092,7 @@ public partial class ThemeEditorWindow : Window
     private void ModeAcrylic_Click(object sender, RoutedEventArgs e) { SetMode(6); }
     private void ModePaper_Click(object sender, RoutedEventArgs e) { SetMode(7); }
     private void ModeEmboss_Click(object sender, RoutedEventArgs e) { SetMode(8); }
+    private void ModeEdge_Click(object sender, RoutedEventArgs e) { SetMode(9); }
 
     private void SetMode(int idx)
     {

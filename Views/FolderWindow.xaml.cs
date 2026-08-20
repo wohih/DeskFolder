@@ -188,10 +188,20 @@ public partial class FolderWindow : Window
         public double Target = 1.0;
     }
 
+    /// <summary>展开动画时按「行优先（上→下、左→右）」有序排列的快捷方式格子，用于错峰淡入。</summary>
+    private readonly List<Border> _orderedCells = new();
+
     private static SettingsService S => App.Settings;
 
     /// <summary>当前窗口对应的文件夹配置（供 App 删除时定位）</summary>
     public FolderConfig Config => _config;
+
+    /// <summary>当前文件夹是否为「贴边文件夹」主题（折叠态贴屏白色方框、展开态同图片主题）。</summary>
+    private bool IsEdgeFolder() => S.GetThemeForFolder(_config.FolderThemeId).Mode == ThemeMode.Edge;
+
+    /// <summary>主屏逻辑宽度 / 高度（用于贴边定位；SystemParameters 单位为逻辑 DIP，与 Window.Left/Top 一致）。</summary>
+    private static double ScreenW => SystemParameters.PrimaryScreenWidth;
+    private static double ScreenH => SystemParameters.PrimaryScreenHeight;
 
     /// <summary>有效列数：每文件夹覆盖优先，否则跟随全局设置</summary>
     private int EffectiveCols => _config.FolderColumns ?? S.Data.Columns;
@@ -199,9 +209,11 @@ public partial class FolderWindow : Window
     private int EffectiveRows => _config.FolderRows ?? S.Data.Rows;
     /// <summary>有效滚动方向：每文件夹覆盖优先，否则跟随全局设置（0=纵向滚动 / 1=横向滚动）</summary>
     private int EffectiveScroll => _config.FolderExpandScroll ?? S.Data.ExpandScroll;
-    /// <summary>折叠图标有效像素尺寸：拖动产生的自由像素值优先，否则用默认像素尺寸。</summary>
+    /// <summary>折叠图标有效像素尺寸：贴边文件夹用其白色方框尺寸；否则拖动产生的自由像素值优先，再否则默认像素尺寸。</summary>
     private (double W, double H) EffectiveFoldSize()
     {
+        if (IsEdgeFolder())
+            return (_config.EdgeBoxWidth, _config.EdgeBoxHeight);
         return (_config.FolderFoldW ?? DefaultFoldPx, _config.FolderFoldH ?? DefaultFoldPx);
     }
 
@@ -338,6 +350,13 @@ public partial class FolderWindow : Window
             _collapsedLeft = Math.Clamp(_config.X, wa.Left, wa.Right - CollapsedW);
             _collapsedTop = Math.Clamp(_config.Y, 0, wa.Bottom - CollapsedH);
         }
+        else if (IsEdgeFolder())
+        {
+            // 贴边文件夹默认贴边：顶→水平居中且贴顶；左/右→贴边、纵向默认 160
+            int ea = _config.EdgeAnchor;
+            if (ea == 1) { _collapsedLeft = ScreenW / 2 - CollapsedW / 2; _collapsedTop = 0; }
+            else { _collapsedLeft = 0; _collapsedTop = 160; }
+        }
         else
         {
             _collapsedLeft = wa.Left + 40;
@@ -365,11 +384,85 @@ public partial class FolderWindow : Window
         LoadItems();
     }
 
-    /// <summary>根据折叠图标位置一次性放置窗口（窗口左上角 = 图标 - 边距；位置固定，动画中不改动）</summary>
+    /// <summary>根据折叠图标位置一次性放置窗口（窗口左上角 = 图标 - 边距；位置固定，动画中不改动）。
+    /// 贴边文件夹改按 EdgeAnchor 计算位置。</summary>
     private void PlaceWindow()
     {
+        if (IsEdgeFolder()) { ApplyEdgePosition(_expanded); return; }
         Left = _collapsedLeft - WIN_PAD;
         Top = _collapsedTop - WIN_PAD;
+    }
+
+    /// <summary>贴边文件夹：按 EdgeAnchor 计算窗口位置。折叠态贴屏（距边 0），展开态距屏 EdgeDistance。</summary>
+    private void ApplyEdgePosition(bool expanded)
+    {
+        int a = _config.EdgeAnchor;
+        double perp = expanded ? _config.EdgeDistance : 0; // 折叠贴边、展开留距
+        double sizeW = expanded ? _panelTargetW : CollapsedW;
+        double sizeH = expanded ? _panelTargetH : CollapsedH;
+        // 沿边坐标：左/右沿竖直(_collapsedTop)，顶沿水平(_collapsedLeft)
+        double along = (a == 2 || a == 3) ? _collapsedTop : _collapsedLeft;
+        switch (a)
+        {
+            case 1: // 顶：横向=along，纵向贴边
+                Left = along - WIN_PAD; Top = perp - WIN_PAD; break;
+            case 2: // 左：纵向=along，横向贴边
+                Left = perp - WIN_PAD; Top = along - WIN_PAD; break;
+            case 3: // 右：纵向=along，横向贴边+尺寸
+                Left = ScreenW - perp - WIN_PAD - sizeW; Top = along - WIN_PAD; break;
+            default:
+                Left = _collapsedLeft - WIN_PAD; Top = _collapsedTop - WIN_PAD; break;
+        }
+    }
+
+    /// <summary>贴边文件夹拖拽：把沿边坐标限制在屏幕范围内（不越界）。</summary>
+    private void ClampEdgeAlong()
+    {
+        int a = _config.EdgeAnchor;
+        if (a == 1) // 顶：横向限制
+            Left = Math.Max(-WIN_PAD, Math.Min(Left, ScreenW - CollapsedW - WIN_PAD));
+        else // 左/右：纵向限制
+            Top = Math.Max(-WIN_PAD, Math.Min(Top, ScreenH - CollapsedH - WIN_PAD));
+    }
+
+    /// <summary>贴边文件夹折叠态：在 FolderChip 上绘制贴屏白色透明方框——贴屏两角无圆角、另两角小圆角；
+    /// 隐藏内部预览图标与名称条，方框尺寸 / 透明度 / 圆角取自 FolderConfig 贴边设置。</summary>
+    private void ApplyEdgeCollapsedVisual()
+    {
+        if (!IsEdgeFolder()) return;
+        int anchor = _config.EdgeAnchor;
+        double op = ThemeHelper.Clamp(_config.EdgeBoxOpacity, 0, 1);
+        double w = Math.Max(20, _config.EdgeBoxWidth);
+        double h = Math.Max(20, _config.EdgeBoxHeight);
+        double r = Math.Max(0, _config.EdgeBoxCorner);
+
+        CollapsedW = w;
+        CollapsedH = h;
+        FolderChip.Width = w;
+        FolderChip.Height = h;
+        FolderChip.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(op * 255), 255, 255, 255));
+        FolderChip.BorderThickness = new Thickness(0);
+        FolderChip.Clip = null; // 仅纯色方框、无内部溢出内容，无需圆角裁剪
+
+        // 贴屏两角无圆角，自由两角取小圆角（CornerRadius 顺序：左上、右上、右下、左下）
+        FolderChip.CornerRadius = anchor switch
+        {
+            1 => new CornerRadius(0, 0, r, r),   // 顶：贴上方，下两角圆
+            3 => new CornerRadius(r, 0, 0, r),   // 右：贴右方，左两角圆
+            _ => new CornerRadius(0, r, r, 0),   // 左（默认）：贴左方，右两角圆
+        };
+
+        // 仅显示白色方框：隐藏内部图标预览与名称条
+        PreviewGrid.Visibility = Visibility.Collapsed;
+        FolderNameBar.Visibility = Visibility.Collapsed;
+
+        // 折叠态不显示图片槽（仅白色方框）；隐藏其视觉并置空，避免遮挡
+        if (_slotCollapsed != null)
+        {
+            StopVideo(_slotCollapsed);
+            if (_slotCollapsed.Host != null) _slotCollapsed.Host.Visibility = Visibility.Collapsed;
+        }
+        _slotCollapsed = null;
     }
 
     /// <summary>拖拽结束后，由当前窗口位置反推折叠图标位置</summary>
@@ -617,6 +710,22 @@ public partial class FolderWindow : Window
                 IconScroller.PanningMode = PanningMode.VerticalOnly;
             }
         }
+
+        CollectOrderedCells();
+    }
+
+    /// <summary>收集展开网格中的快捷方式格子，按行优先（上→下、左→右）排序，供展开动画错峰淡入使用。</summary>
+    private void CollectOrderedCells()
+    {
+        _orderedCells.Clear();
+        var list = new List<(Border B, int R, int C)>();
+        foreach (var child in IconGrid.Children)
+        {
+            if (child is Border b && b.GetValue(DragIdProperty) is string s && s == "shortcut")
+                list.Add((b, Grid.GetRow(b), Grid.GetColumn(b)));
+        }
+        list.Sort((a, b) => (a.R * 1000 + a.C).CompareTo(b.R * 1000 + b.C));
+        _orderedCells.AddRange(list.Select(x => x.B));
     }
 
     /// <summary>按 ScrollViewer 真实可滚动量，用 OpacityMask 让边缘图标淡出成透明（真正的"虚化"）：
@@ -971,6 +1080,7 @@ public partial class FolderWindow : Window
 
         Width = AnimWindowW();
         Height = AnimWindowH();
+        if (IsEdgeFolder()) ApplyEdgePosition(true); // 展开态按 EdgeAnchor 贴边并保留 EdgeDistance 间距
 
         CollapsedView.IsHitTestVisible = false;
         Panel.Visibility = Visibility.Visible;
@@ -1066,6 +1176,8 @@ public partial class FolderWindow : Window
             Panel.Opacity = 0;
             CollapsedView.Opacity = 1;
             PluginHostCollapsed.Opacity = 1;  // 展开时插件从1渐隐到0
+            // 展开图标错峰出现：先把所有图标设为透明，OnPanelAnimFrame 按行优先逐个淡入
+            foreach (var c in _orderedCells) c.Opacity = 0;
         }
         else
         {
@@ -1120,6 +1232,21 @@ public partial class FolderWindow : Window
             PluginHostCollapsed.Opacity = k; // 折叠态插件同步淡入
         }
 
+        // 展开图标错峰淡入：按行优先（上→下、左→右）索引逐个出现（所有主题通用）
+        if (_animExpand && _orderedCells.Count > 0)
+        {
+            int n = _orderedCells.Count;
+            double cellFade = 0.35;           // 单个图标淡入占整体动画的比例
+            double maxStart = 1 - cellFade;   // 最后一个图标最晚开始时刻
+            double denom = Math.Max(1, n - 1);
+            for (int i = 0; i < n; i++)
+            {
+                double start = maxStart * i / denom;
+                double o = (p - start) / cellFade;
+                _orderedCells[i].Opacity = Math.Max(0, Math.Min(1, o));
+            }
+        }
+
         if (p >= 1.0)
         {
             // 退订由 OnRenderFrame 末尾统一处理（歌词动画可能仍在进行）
@@ -1131,6 +1258,7 @@ public partial class FolderWindow : Window
                 Panel.Width = _panelTargetW;
                 Panel.Height = _panelTargetH;
                 Panel.Opacity = 1;
+                foreach (var c in _orderedCells) c.Opacity = 1; // 动画结束确保图标完全显示
                 CollapsedView.Visibility = Visibility.Collapsed;
                 CollapsedView.Opacity = 1;
                 PluginHostCollapsed.Opacity = 0;
@@ -1190,6 +1318,7 @@ public partial class FolderWindow : Window
                 // 收起完成：窗口一次性缩回折叠尺寸（仅此一次跳变，无残影）
                 Width = CollapsedW + WIN_PAD * 2;
                 Height = CollapsedH + WIN_PAD * 2;
+                if (IsEdgeFolder()) ApplyEdgePosition(false); // 收起后重新贴边
                 _expanded = false;
                 if (IsMouseOver)
                 {
@@ -1513,8 +1642,20 @@ public partial class FolderWindow : Window
     {
         if (!_mouseDown) return;
         var cur = PointToScreen(e.GetPosition(this)); // 物理屏幕坐标（绝对，不随窗口位置变化）
-        Left = _winLeftStart + (cur.X - _dragScreenStart.X) / _dpiScaleX;
-        Top = _winTopStart + (cur.Y - _dragScreenStart.Y) / _dpiScaleY;
+        double dx = (cur.X - _dragScreenStart.X) / _dpiScaleX;
+        double dy = (cur.Y - _dragScreenStart.Y) / _dpiScaleY;
+        if (IsEdgeFolder())
+        {
+            // 贴边文件夹：仅允许沿贴边方向拖动，垂直/水平被锁定在屏幕边缘
+            if (_config.EdgeAnchor == 1) Left = _winLeftStart + dx;   // 顶：仅横向
+            else Top = _winTopStart + dy;                            // 左/右：仅纵向
+            ClampEdgeAlong();
+        }
+        else
+        {
+            Left = _winLeftStart + dx;
+            Top = _winTopStart + dy;
+        }
     }
 
     /// <summary>松开：比较位移判定"拖动"或"轻点展开"，并释放鼠标捕获。</summary>
@@ -1653,7 +1794,11 @@ public partial class FolderWindow : Window
                 if (item is MenuItem mi && mi.Tag as string == "Delete")
                 {
                     mi.Visibility = _expanded ? Visibility.Visible : Visibility.Collapsed;
-                    break;
+                }
+                else if (item is MenuItem mi2 && mi2.Name == "EdgeSettingsMenu")
+                {
+                    // 贴边设置仅对「贴边文件夹」主题有意义
+                    mi2.Visibility = IsEdgeFolder() ? Visibility.Visible : Visibility.Collapsed;
                 }
             }
         }
@@ -1816,6 +1961,32 @@ public partial class FolderWindow : Window
         win.ShowDialog();
     }
 
+    /// <summary>打开「贴边设置」对话框（仅「贴边文件夹」主题可用），调整贴边位置 / 方框透明度 / 大小 / 圆角 / 距边距离。</summary>
+    private void EdgeSettingsMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _settingsOpen = true;
+        var win = new EdgeSettingsWindow(_config);
+        win.Owner = this;
+        win.Closed += (_, _) =>
+        {
+            _settingsOpen = false;
+            // 重新应用主题（折叠态白色方框 / 展开态定位）并重定位窗口
+            ApplyTheme();
+            PlaceWindow();
+            if (_expanded) ApplyEdgePosition(true);
+            if (!IsMouseOver) _collapseTimer.Start();
+        };
+        win.ShowDialog();
+    }
+
+    /// <summary>供「贴边设置」对话框调用：实时把最新的贴边配置反映到折叠方框 / 展开定位上（不落盘）。</summary>
+    public void RefreshEdgeVisual()
+    {
+        ApplyTheme();
+        PlaceWindow();
+        if (_expanded) ApplyEdgePosition(true);
+    }
+
     private void PluginsMenu_Click(object sender, RoutedEventArgs e)
     {
         _settingsOpen = true;
@@ -1888,6 +2059,11 @@ public partial class FolderWindow : Window
             ApplyEmbossBackground(FolderChip, theme);
             ApplyEmbossBackground(Panel, theme);
         }
+        else if (theme.Mode == ThemeMode.Edge)
+        {
+            // 展开态同图片主题（背景图 / 白色透明兜底）；折叠态白色方框在 ApplyTheme 末尾由 ApplyEdgeCollapsedVisual 收尾
+            SetupImageThemes(theme);
+        }
         else // Fill：纯色背景 + 透明度
         {
             ThemeHelper.TryParseColor(theme.BackgroundColor, out var baseC);
@@ -1909,6 +2085,9 @@ public partial class FolderWindow : Window
 
         // 插件渲染：与主题无关，每次 ApplyTheme 后重新挂载（含刷新时钟/日历等）
         ApplyPlugins();
+
+        // 贴边文件夹：折叠态白色方框（覆盖上面的图片槽 / 名称条渲染）
+        if (IsEdgeFolder()) ApplyEdgeCollapsedVisual();
 
         // 如果当前处于展开状态，需要重新构建网格以更新图标文字颜色等
         if (_expanded && !_animating)
@@ -4455,7 +4634,7 @@ public partial class FolderWindow : Window
         var playlist = slot.Playlist;
         if (playlist.Paths.Count == 0)
         {
-            slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)); // 兜底淡底色
+            slot.Target.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255)); // 兜底淡底色
             StopVideo(slot);
             return;
         }
@@ -4463,7 +4642,7 @@ public partial class FolderWindow : Window
         string path = playlist.Paths[index];
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0));
+            slot.Target.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
             StopVideo(slot);
             return;
         }
@@ -4531,7 +4710,7 @@ public partial class FolderWindow : Window
         }
         catch
         {
-            slot.Target.Background = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0));
+            slot.Target.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
             StopVideo(slot);
         }
     }

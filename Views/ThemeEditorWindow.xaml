@@ -77,6 +77,10 @@
                                         Padding="14,7" Background="#F0F0F0" Foreground="#444"
                                         BorderThickness="0" FontSize="12"
                                         HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
+                                <Button x:Name="ModeEdgeBtn" Content="贴边" Click="ModeEdge_Click"
+                                        Padding="14,7" Background="#F0F0F0" Foreground="#444"
+                                        BorderThickness="0" FontSize="12"
+                                        HorizontalContentAlignment="Center" Margin="-1,0,0,0"/>
                             </StackPanel>
 
                             <!-- 隐藏的 ComboBox（保留供代码-behind通过 SelectedIndex 读取/设置） -->
@@ -90,6 +94,7 @@
                                 <ComboBoxItem Content="亚克力"/>
                                 <ComboBoxItem Content="折纸"/>
                                 <ComboBoxItem Content="浮雕"/>
+                                <ComboBoxItem Content="贴边文件夹"/>
                             </ComboBox>
 
                             <!-- 颜色组（填充背景 / 方框颜色） -->

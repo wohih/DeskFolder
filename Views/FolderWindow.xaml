@@ -22,6 +22,7 @@
             <MenuItem Header="折叠图标大小设置…" Click="SizeMenu_Click"/>
             <MenuItem Header="折叠图标显示排列…" Click="ArrangeMenu_Click"/>
             <MenuItem Header="外观设置…" Click="AppearanceMenu_Click"/>
+            <MenuItem x:Name="EdgeSettingsMenu" Header="贴边设置…" Click="EdgeSettingsMenu_Click"/>
             <MenuItem Header="插件管理…" Click="PluginsMenu_Click"/>
             <Separator/>
             <MenuItem Header="删除该文件夹" Tag="Delete" Foreground="#C0392B" Click="DeleteMenu_Click"/>

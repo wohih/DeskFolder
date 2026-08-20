@@ -25,7 +25,10 @@ public enum ThemeMode
     /// <summary>折纸风格：多层阴影堆叠 + 微位移，拟物折纸效果</summary>
     Paper,
     /// <summary>浮雕风格：内阴影凹入效果，3D 按钮观感</summary>
-    Emboss
+    Emboss,
+    /// <summary>贴边文件夹：折叠态在屏幕某一边显示一个白色透明方框（贴屏两角无圆角、另两角小圆角）；
+    /// 展开态设置与图片主题一致（默认白色透明背景，可导入图片/视频），并提供与屏幕边缘的间距设置。</summary>
+    Edge
 }
 
 /// <summary>图片背景的子模式：单图（折叠/展开共用同一组图）/ 多图（折叠/展开各自一组图）。</summary>
@@ -227,6 +230,11 @@ public class ThemeConfig
                 // 用斜向灰阶渐变表示"图片"类型
                 return new LinearGradientBrush(Colors.LightGray, Colors.Gray, 45);
             }
+            if (Mode == ThemeMode.Edge)
+            {
+                // 贴边文件夹：折叠态为白色透明方框，用半透明白块表示
+                return new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+            }
             // 填充模式
             if (ThemeHelper.TryParseColor(BackgroundColor, out var bc))
             {
@@ -397,6 +405,20 @@ public class FolderConfig
     /// <summary>美化插件列表：每个文件夹可挂载多个装饰性插件（时钟 / 便签 / 日历等）。
     /// 与主题无关，任何主题下都可独立启用，用于桌面美化装饰。</summary>
     public List<FolderPlugin> Plugins { get; set; } = new();
+
+    // ---------------- 贴边文件夹设置（仅当主题模式为 Edge 时生效） ----------------
+    /// <summary>贴附的屏幕边缘：0=不贴边（普通文件夹）/ 1=顶 / 2=左 / 3=右。默认贴左。</summary>
+    public int EdgeAnchor { get; set; } = 2;
+    /// <summary>折叠态白色透明方框不透明度（0-1）。</summary>
+    public double EdgeBoxOpacity { get; set; } = 0.28;
+    /// <summary>折叠态白色方框宽度（逻辑像素）。</summary>
+    public double EdgeBoxWidth { get; set; } = 120;
+    /// <summary>折叠态白色方框高度（逻辑像素）。</summary>
+    public double EdgeBoxHeight { get; set; } = 120;
+    /// <summary>折叠态白色方框自由角的圆角半径（贴屏的两个角始终无圆角）。逻辑像素。</summary>
+    public double EdgeBoxCorner { get; set; } = 8;
+    /// <summary>展开态文件夹与所贴屏幕边缘之间的距离（逻辑像素）。</summary>
+    public double EdgeDistance { get; set; } = 12;
 }
 
 public class AppSettingsData
@@ -461,6 +483,10 @@ public class SettingsService
         new ThemeConfig { BuiltInId = "emboss", Name = "浮雕经典", Mode = ThemeMode.Emboss,
             EmbossColor = "#E8E8E8", EmbossHeight = 3.5,
             CornerRadius = 12 },
+        new ThemeConfig { BuiltInId = "edge", Name = "贴边文件夹", Mode = ThemeMode.Edge,
+            ImagePath = "", BackgroundOpacity = 1.0, CornerRadius = 16,
+            // 折叠态白色透明方框默认（展开态沿用图片主题设置）
+            BorderColor = "#FFFFFF" },
     };
 
     public AppSettingsData Data { get; private set; } = new();
