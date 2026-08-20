@@ -1970,21 +1970,22 @@ public partial class FolderWindow : Window
         win.Closed += (_, _) =>
         {
             _settingsOpen = false;
-            // 重新应用主题（折叠态白色方框 / 展开态定位）并重定位窗口
+            // 重新应用主题（折叠态白色方框 / 展开态图片背景与定位）并按白框尺寸重设窗口
             ApplyTheme();
-            PlaceWindow();
-            if (_expanded) ApplyEdgePosition(true);
+            RefreshEdgeVisual();
             if (!IsMouseOver) _collapseTimer.Start();
         };
         win.ShowDialog();
     }
 
-    /// <summary>供「贴边设置」对话框调用：实时把最新的贴边配置反映到折叠方框 / 展开定位上（不落盘）。</summary>
+    /// <summary>供「贴边设置」对话框调用：实时把最新的贴边配置反映到折叠方框 / 展开定位上（不落盘）。
+    /// 仅重绘折叠白框、按白框重设窗口尺寸并重定位，避免每次拖动滑块都重建图片槽造成卡顿；完整主题重建由对话框关闭时统一执行。</summary>
     public void RefreshEdgeVisual()
     {
-        ApplyTheme();
-        PlaceWindow();
-        if (_expanded) ApplyEdgePosition(true);
+        ApplyEdgeCollapsedVisual();
+        Width = CollapsedW + WIN_PAD * 2;
+        Height = CollapsedH + WIN_PAD * 2;
+        ApplyEdgePosition(_expanded);
     }
 
     private void PluginsMenu_Click(object sender, RoutedEventArgs e)
