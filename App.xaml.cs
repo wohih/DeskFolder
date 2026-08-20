@@ -11,10 +11,48 @@ public partial class App : System.Windows.Application
     private TrayIcon? _tray;
     private readonly List<FolderWindow> _windows = new();
     private SettingsWindow? _settingsWindow;
+    private static bool _musicStarted;
 
     public static SettingsService Settings { get; private set; } = null!;
     /// <summary>全局共享的音乐服务单例（避免多文件夹各自实例化：多 WinEvent Hook / 定时器 / 重复歌词请求）。</summary>
     public static MusicService Music { get; private set; } = null!;
+
+    /// <summary>判断文件夹是否含音乐播放器插件（用于决定是否启动全局音乐服务）。</summary>
+    private static bool HasMusicPlugin(FolderConfig f) =>
+        f.Plugins != null && f.Plugins.Any(p => p.Type == FolderPluginType.MusicPlayer);
+
+    /// <summary>惰性启动全局音乐服务（首个音乐插件文件夹初始化时调用）。已启动则直接跳过。</summary>
+    public static void EnsureMusicStarted()
+    {
+        if (_musicStarted) return;
+        _musicStarted = true;
+        try { Music.Start(); } catch { }
+    }
+
+    /// <summary>可选内存诊断：若 %TEMP%/DeskFolder_memdiag.on 存在，则每 20s 记录工作集/GC 内存到
+    /// %TEMP%/DeskFolder_memdiag.log。用于对比「关闭全局音乐服务」前后的空闲内存变化；删除 .on 文件即停止。</summary>
+    private void StartMemDiag()
+    {
+        try
+        {
+            string flag = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DeskFolder_memdiag.on");
+            if (!System.IO.File.Exists(flag)) return;
+            var timer = new System.Threading.Timer(_ =>
+            {
+                try
+                {
+                    var proc = System.Diagnostics.Process.GetCurrentProcess();
+                    long ws = proc.WorkingSet64;
+                    long gc = GC.GetTotalMemory(false);
+                    System.IO.File.AppendAllText(
+                        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DeskFolder_memdiag.log"),
+                        $"[{DateTime.Now:HH:mm:ss}] WorkingSet={ws / 1024 / 1024}MB GC={gc / 1024 / 1024}MB MusicStarted={_musicStarted}\n");
+                }
+                catch { }
+            }, null, System.TimeSpan.FromSeconds(5), System.TimeSpan.FromSeconds(20));
+        }
+        catch { }
+    }
 
     // crash.log 写入目录（exe同级+AppData双写，确保用户能找到）
     private static string CrashLogDir
@@ -105,9 +143,13 @@ public partial class App : System.Windows.Application
 
         Settings = SettingsService.Load();
 
-        // 全局音乐服务单例：跟随 App 生命周期启动（检测/控制/歌词全局共享一份）
+        // 全局音乐服务单例：仅在存在音乐插件文件夹时才启动（惰性）。
+        // 无音乐文件夹时不启动，避免 SMTC 管理器 / WinEvent 标题钩子 / 3s 轮询 /
+        // 歌词网络请求 / 专辑封面解码 常驻空转，显著节省空闲内存与 CPU。
+        // 首个音乐插件文件夹初始化时由 FolderWindow.InitMusicService → EnsureMusicStarted 惰性拉起。
         Music = new MusicService();
-        Music.Start();
+        if (Settings.Data.Folders.Any(HasMusicPlugin))
+            Music.Start();
 
         // 首次运行：自动把桌面上的快捷方式导入默认文件夹
         if (Settings.Data.Folders.Count == 0)
@@ -130,6 +172,9 @@ public partial class App : System.Windows.Application
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+
+        // 可选内存诊断（默认关闭，需 %TEMP%/DeskFolder_memdiag.on 存在才生效）
+        StartMemDiag();
     }
 
     private void OpenAllFolders()

@@ -4213,6 +4213,9 @@ public partial class FolderWindow : Window
     {
         if (_musicService != null) return;
 
+        // 首个音乐插件文件夹初始化时惰性启动全局音乐服务（无音乐文件夹时 App 启动阶段不会启动它）
+        App.EnsureMusicStarted();
+
         // 订阅全局共享单例（App.Music），用命名方法以便 Cleanup 时正确退订
         _musicService = App.Music;
         _musicService.SongInfoChanged += OnMusicSongInfoChanged;
@@ -4304,9 +4307,9 @@ public partial class FolderWindow : Window
         public Grid Host = null!;
         /// <summary>视频背景元素（按需创建，图片为主题时保持 null）。静音循环播放。</summary>
         public MediaElement? Media = null;
-        /// <summary>驱动视频播放的 MediaClock（RepeatBehavior=Forever 无缝循环）。
-        /// 用 Clock.Controller.Pause/Play 把播放严格绑定到「当前可见槽」，隐藏槽暂停解码以省资源。</summary>
-        public MediaClock? Clock = null;
+        /// <summary>当前已加载的视频路径。仅当路径变化时才重新设置 Source，
+        /// 避免每次 ReloadSlot/轮播都重建 MediaElement 的内部播放管线（否则旧的会泄漏非托管缓冲）。</summary>
+        public string? VideoPath = null;
         public int Index;
         public DispatcherTimer? GifTimer;
     }
@@ -4533,11 +4536,12 @@ public partial class FolderWindow : Window
         }
     }
 
-    /// <summary>创建/复用槽内的 MediaElement 播放视频背景。
-    /// 优化点：
-    /// 1) 改用 MediaTimeline + MediaClock（RepeatBehavior=Forever）实现原生无缝循环，避免 MediaEnded 重定位造成的卡顿；
-    /// 2) 用 Clock.Controller.Pause/Play 把播放严格绑定到「当前可见槽」——同一文件夹的折叠/展开槽只有一个可见，
-    ///    原先两者会同时解码同一视频（2 个 MediaElement 常驻），是内存飙升与卡顿的主因；隐藏槽暂停后不再解码，省 CPU/内存。</summary>
+    /// <summary>在槽内播放视频背景（静音循环）。
+    /// 采用 Source + Pause/Play 方案（而非 MediaClock）：
+    /// 1) 避免 WPF MediaClock 在循环播放时持续分配非托管缓冲导致的「内存只涨不落」泄漏；
+    /// 2) 仍保留「仅可见槽解码」优化——隐藏槽 Pause() 即停止解码，省 CPU/内存，且切换不闪；
+    /// 3) 仅当视频路径变化时才重新设置 Source，避免每次 ReloadSlot/轮播都重建内部播放管线（旧管线泄漏）。
+    /// 循环通过 MediaEnded 回到开头实现（边界处极轻微一帧跳变，远小于内存泄漏的危害）。</summary>
     private void LoadVideo(ImageSlot slot, string path)
     {
         if (slot.Media == null)
@@ -4548,32 +4552,27 @@ public partial class FolderWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 IsHitTestVisible = false,
-                LoadedBehavior = MediaState.Manual,   // 由 Clock 驱动，不自动播放
+                LoadedBehavior = MediaState.Manual,   // 手动控制 Play/Pause
                 UnloadedBehavior = MediaState.Close,
                 IsMuted = true,
                 Volume = 0
+            };
+            // 播放结束自动回到开头循环（部分封装的 mp4 不会自动循环）
+            me.MediaEnded += (_, _) =>
+            {
+                try { me.Position = TimeSpan.Zero; me.Play(); } catch { }
             };
             slot.Host.Children.Add(me);
             slot.Media = me;
             // 容器尺寸变化（展开/收起动画、窗口尺寸调整）时重新套用裁切变换
             slot.Host.SizeChanged += (_, _) => ApplyVideoCrop(slot);
         }
-        try
+        // 路径未变则不再重建 Source（关键：防止重复创建内部播放管线导致非托管泄漏）
+        if (!string.Equals(slot.VideoPath, path, StringComparison.OrdinalIgnoreCase))
         {
-            // 同一槽重载时先停掉旧时钟
-            slot.Clock?.Controller?.Stop();
-            slot.Media.Clock = null;
-
-            var timeline = new MediaTimeline(new Uri(path, UriKind.Absolute))
-            {
-                RepeatBehavior = RepeatBehavior.Forever   // 原生无限循环，无需 MediaEnded 重定位
-            };
-            var clock = timeline.CreateClock();
-            slot.Media.Clock = clock;
-            slot.Clock = clock;
-            clock.Controller?.Pause();   // 初始暂停：由 SyncVideoPlayback 按可见状态决定播放/暂停
+            try { slot.Media.Source = new Uri(path, UriKind.Absolute); } catch { }
+            slot.VideoPath = path;
         }
-        catch { }
         slot.Media.Visibility = Visibility.Visible;
         slot.Img.Visibility = Visibility.Collapsed;
         ApplyVideoCrop(slot);
@@ -4584,10 +4583,9 @@ public partial class FolderWindow : Window
     {
         if (slot.Media != null)
         {
-            try { slot.Clock?.Controller?.Stop(); } catch { }
-            try { slot.Media.Clock = null; } catch { }
-            slot.Clock = null;
+            try { slot.Media.Pause(); } catch { }
             try { slot.Media.Source = null; } catch { }
+            slot.VideoPath = null;
             slot.Media.Visibility = Visibility.Collapsed;
         }
         slot.Img.Visibility = Visibility.Visible;
@@ -4620,15 +4618,15 @@ public partial class FolderWindow : Window
         SyncOneVideo(_slotExpanded, expanded);    // 展开态：展开时播放
     }
 
-    /// <summary>对单个槽：应播放则 Clock.Resume（MediaClock 被分配即自动 Begin，暂停后用 Resume 续播），
-    /// 应隐藏则 Clock.Pause（停止解码但不释放文件，切换回时不闪烁）。</summary>
+    /// <summary>对单个槽：应播放则 Play（开始解码），应隐藏则 Pause（停止解码但不释放文件，切换回时不闪烁）。
+    /// 无视频源时不作操作。</summary>
     private void SyncOneVideo(ImageSlot? slot, bool shouldPlay)
     {
-        if (slot?.Media == null || slot.Clock == null) return;
+        if (slot?.Media == null || slot.Media.Source == null) return;
         try
         {
-            if (shouldPlay) slot.Clock.Controller?.Resume();
-            else slot.Clock.Controller?.Pause();
+            if (shouldPlay) slot.Media.Play();
+            else slot.Media.Pause();
         }
         catch { }
     }
@@ -4679,34 +4677,38 @@ public partial class FolderWindow : Window
     {
         foreach (var t in _rotateTimers) t.Stop();
         _rotateTimers.Clear();
+        // 同时停止 GIF 帧定时器（重载主题时旧 GIF 定时器必须停掉，否则会持续重复解码泄漏）
+        foreach (var t in _gifTimers) { try { t.Stop(); } catch { } }
+        _gifTimers.Clear();
         foreach (var slot in new[] { _slotCollapsed, _slotExpanded })
         {
             if (slot?.Media != null)
             {
-                try { slot.Clock?.Controller?.Stop(); } catch { }
-                try { slot.Media.Clock = null; } catch { }
-                slot.Clock = null;
+                try { slot.Media.Stop(); } catch { }
                 try { slot.Media.Source = null; } catch { }
+                slot.VideoPath = null;
             }
         }
         _slotCollapsed = null;
         _slotExpanded = null;
     }
 
-    /// <summary>窗口关闭时释放所有视频时钟与轮播计时器（避免 MediaElement / DispatcherTimer 泄漏）。</summary>
+    /// <summary>窗口关闭时释放所有视频与轮播/GIF 计时器（避免 MediaElement / DispatcherTimer 泄漏）。</summary>
     private void StopAllVideos()
     {
         foreach (var slot in new[] { _slotCollapsed, _slotExpanded })
         {
             if (slot?.Media != null)
             {
-                try { slot.Clock?.Controller?.Stop(); } catch { }
-                try { slot.Media.Clock = null; } catch { }
-                slot.Clock = null;
+                try { slot.Media.Stop(); } catch { }
+                try { slot.Media.Source = null; } catch { }
+                slot.VideoPath = null;
             }
         }
         foreach (var t in _rotateTimers) t.Stop();
         _rotateTimers.Clear();
+        foreach (var t in _gifTimers) { try { t.Stop(); } catch { } }
+        _gifTimers.Clear();
     }
 
     /// <summary>当前是否为图片背景模式。</summary>
