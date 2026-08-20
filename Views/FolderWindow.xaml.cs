@@ -191,6 +191,9 @@ public partial class FolderWindow : Window
     /// <summary>展开动画时按「行优先（上→下、左→右）」有序排列的快捷方式格子，用于错峰淡入。</summary>
     private readonly List<Border> _orderedCells = new();
 
+    /// <summary>贴边文件夹展开/收起动画的窗口位置插值起止点：从「贴屏(距边0)」平滑滑离到「距边 EdgeDistance」（收起时反向）。</summary>
+    private double _edgeFromLeft, _edgeFromTop, _edgeToLeft, _edgeToTop;
+
     private static SettingsService S => App.Settings;
 
     /// <summary>当前窗口对应的文件夹配置（供 App 删除时定位）</summary>
@@ -412,6 +415,19 @@ public partial class FolderWindow : Window
                 Left = ScreenW - perp - WIN_PAD - sizeW; Top = along - WIN_PAD; break;
             default:
                 Left = _collapsedLeft - WIN_PAD; Top = _collapsedTop - WIN_PAD; break;
+        }
+    }
+
+    /// <summary>贴边文件夹：按给定「距边距离 perp」与「尺寸 sizeW/sizeH」算出窗口 Left/Top（供动画逐帧插值，避免一步跳变）。</summary>
+    private void EdgePositionFor(double perp, double sizeW, double sizeH, out double left, out double top)
+    {
+        int a = _config.EdgeAnchor;
+        double along = (a == 2 || a == 3) ? _collapsedTop : _collapsedLeft;
+        switch (a)
+        {
+            case 1: left = along - WIN_PAD; top = perp - WIN_PAD; break;          // 顶：横向=along，纵向贴边
+            case 3: left = ScreenW - perp - WIN_PAD - sizeW; top = along - WIN_PAD; break; // 右：贴右
+            default: left = perp - WIN_PAD; top = along - WIN_PAD; break;          // 左：贴左
         }
     }
 
@@ -1080,7 +1096,13 @@ public partial class FolderWindow : Window
 
         Width = AnimWindowW();
         Height = AnimWindowH();
-        if (IsEdgeFolder()) ApplyEdgePosition(true); // 展开态按 EdgeAnchor 贴边并保留 EdgeDistance 间距
+        if (IsEdgeFolder())
+        {
+            // 起始贴边（距屏 0），动画中随进度 k 平滑滑离至 EdgeDistance；避免在动画开始前一步跳变
+            EdgePositionFor(0, CollapsedW, CollapsedH, out _edgeFromLeft, out _edgeFromTop);
+            EdgePositionFor(_config.EdgeDistance, _panelTargetW, _panelTargetH, out _edgeToLeft, out _edgeToTop);
+            Left = _edgeFromLeft; Top = _edgeFromTop;
+        }
 
         CollapsedView.IsHitTestVisible = false;
         Panel.Visibility = Visibility.Visible;
@@ -1115,6 +1137,13 @@ public partial class FolderWindow : Window
         _animating = true;
         _collapseTimer.Stop();
         HideHoverNameLabel(); // 收起时隐藏可能残留的名称浮层
+
+        // 贴边文件夹：收起动画从「展开位(距边 EdgeDistance)」平滑滑回「贴屏(距边0)」，避免末了一步跳变
+        if (IsEdgeFolder())
+        {
+            EdgePositionFor(_config.EdgeDistance, _panelTargetW, _panelTargetH, out _edgeFromLeft, out _edgeFromTop);
+            EdgePositionFor(0, CollapsedW, CollapsedH, out _edgeToLeft, out _edgeToTop);
+        }
         CollapsedView.Visibility = Visibility.Visible;
         int ms = Math.Max((int)(S.Data.AnimationMs * 1.5), 300);
 
@@ -1219,6 +1248,13 @@ public partial class FolderWindow : Window
         Panel.Width = _panelFromW + (_panelToW - _panelFromW) * k;
         Panel.Height = _panelFromH + (_panelToH - _panelFromH) * k;
 
+        // 贴边文件夹：窗口位置随同一进度 k 同步插值（贴屏 ↔ 距边 EdgeDistance），使方块边滑边长大/边滑边缩小，消除跳变
+        if (IsEdgeFolder())
+        {
+            Left = _edgeFromLeft + (_edgeToLeft - _edgeFromLeft) * k;
+            Top = _edgeFromTop + (_edgeToTop - _edgeFromTop) * k;
+        }
+
         if (_animExpand)
         {
             CollapsedView.Opacity = 1 - k;
@@ -1258,6 +1294,7 @@ public partial class FolderWindow : Window
                 Panel.Width = _panelTargetW;
                 Panel.Height = _panelTargetH;
                 Panel.Opacity = 1;
+                if (IsEdgeFolder()) ApplyEdgePosition(true); // 展开完成精确贴合 EdgeDistance（与逐帧插值终点一致）
                 foreach (var c in _orderedCells) c.Opacity = 1; // 动画结束确保图标完全显示
                 CollapsedView.Visibility = Visibility.Collapsed;
                 CollapsedView.Opacity = 1;
